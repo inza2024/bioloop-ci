@@ -44,6 +44,7 @@ export interface Catalog {
 
 export interface Declaration {
   id: string;
+  owner_organization_id: string | null;
   producer_id: string;
   producer_name: string;
   producer_locality: string;
@@ -171,6 +172,9 @@ export interface LotDecision {
   note: string;
   actor_label: string;
   actor_authenticated: false;
+  actor_user_id: string | null;
+  actor_organization_id: string | null;
+  actor_role: string | null;
   provenance: "declared";
   proof_level: "P1";
 }
@@ -219,11 +223,14 @@ export interface RecalculationResult {
 export interface AuditEvent {
   id: string;
   correlation_id: string;
-  declaration_id: string;
+  declaration_id: string | null;
   event_type: string;
   object_type: string;
   object_id: string;
   payload: Record<string, unknown>;
+  actor_user_id: string | null;
+  actor_organization_id: string | null;
+  actor_role: string | null;
   created_at: string;
 }
 
@@ -235,4 +242,146 @@ export interface DeclarationTimeline {
   estimate_runs: EstimateRunSummary[];
   estimate_lineage: RecalculationResult["lineage"][];
   audit_events: AuditEvent[];
+}
+
+export type DemoRole =
+  | "producer"
+  | "logistician"
+  | "processing_unit_operator"
+  | "field_controller"
+  | "bioloop_coordinator"
+  | "client_farmer";
+
+export interface DemoActor {
+  user_id: string;
+  display_name: string;
+  organization_id: string;
+  organization_name: string;
+  role: DemoRole;
+  site_type: "producer" | "processing_unit" | null;
+  site_id: string | null;
+  is_demo: true;
+  authenticated_for_production: false;
+}
+
+export interface DemoActorCatalog {
+  mode_label: "mode démonstration — aucune authentification de production";
+  actors: DemoActor[];
+}
+
+export interface NotificationRecord {
+  id: string;
+  organization_id: string;
+  target_role: DemoRole | null;
+  event_type: string;
+  subject_type: string;
+  subject_id: string;
+  message: string;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface CollectionRecord {
+  id: string;
+  declaration_id: string;
+  route_id: string;
+  processing_unit_id: string;
+  logistician_organization_id: string;
+  status: "assigned" | "collected";
+  scheduled_date: string;
+  expected_quantity_kg: string;
+  quantity_unit: "kg";
+  total_straight_line_km: string;
+  distance_unit: string;
+  route_method: string;
+  stops: Proposal["route"]["stops"];
+  evidence_id: string | null;
+  measurement_id: string | null;
+  confirmed_at: string | null;
+  confirmed_by_user_id: string | null;
+  confirmed_by_organization_id: string | null;
+  created_at: string;
+  status_provenance: "simulated" | "declared";
+  status_proof_level: "P0" | "P1";
+  route_provenance: "simulated";
+  route_proof_level: "P0";
+  human_validation_required: true;
+}
+
+export interface ForecastMetric {
+  value_kg: string;
+  basis_provenance: string;
+  basis_proof_level: ProofLevel;
+  result_provenance: "simulated";
+  result_proof_level: "P0";
+}
+
+export interface ForecastReport {
+  processing_unit_id: string;
+  as_of: string;
+  classification: string;
+  version: string;
+  source: string;
+  periods: Array<{
+    period_days: 7 | 30;
+    declared: ForecastMetric;
+    measured_basis: ForecastMetric;
+    measured_coverage_declarations: number;
+  }>;
+  limitations: string[];
+  historical_data_required_before_ml: string[];
+}
+
+export interface VerificationRecord {
+  id: string;
+  subject_type: "waste_lot";
+  subject_id: string;
+  outcome: "verified" | "non_conform";
+  note: string;
+  verified_at: string;
+  actor_user_id: string;
+  actor_organization_id: string;
+  actor_role: "field_controller";
+  provenance: "verified";
+  proof_level: "P4";
+}
+
+export interface DemoWorkspace {
+  actor: DemoActor;
+  mode_label: DemoActorCatalog["mode_label"];
+  permissions: string[];
+  notifications: NotificationRecord[];
+  producer_declarations: Array<{
+    declaration: Declaration;
+    proposed_unit_id: string | null;
+    collection_status: string | null;
+    lot_status: string | null;
+    next_action: string;
+  }>;
+  logistics_collections: Array<{
+    collection: CollectionRecord;
+    producer_name: string;
+    waste_type_name: string;
+    processing_unit_name: string;
+    available_capacity_kg: string;
+    capacity_proof_level: "P0";
+  }>;
+  incoming_lots: Array<{
+    lot: LotRecord;
+    producer_name: string;
+    waste_type_name: string;
+    compatibility: boolean;
+    available_capacity_kg: string;
+    compatibility_proof_level: "P0";
+  }>;
+  pending_controls: Array<{
+    lot: LotRecord;
+    producer_name: string;
+    existing_verification: VerificationRecord | null;
+  }>;
+  projections: ForecastReport[];
+  coordinator_counts: Record<string, number>;
+  audit_events: AuditEvent[];
+  products: Array<Record<string, unknown>>;
+  product_empty_state: string | null;
 }

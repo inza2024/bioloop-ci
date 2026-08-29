@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .catalog import Catalog
+from .collaboration import AuthorizationError, CollaborationService, MODE_LABEL
 from .config import Settings
 from .estimation import EstimationEngine
 from .evidence import (
@@ -16,8 +18,17 @@ from .evidence import (
     EvidenceValidationError,
 )
 from .matching import compatible_units
+from .forecasting import DeterministicDeclarationForecastService
+from .identity import DEFAULT_DEMO_USER_ID, IdentityDirectory, IdentityError
 from .models import (
+    AuditEventRecord,
+    CollectionConfirmCreate,
+    CollectionRecord,
     DeclarationTimeline,
+    DemoActor,
+    DemoActorCatalog,
+    DemoRole,
+    DemoWorkspace,
     EvidenceCategory,
     EvidenceLabel,
     EvidenceRecord,
@@ -34,11 +45,18 @@ from .models import (
     RecalculationCreate,
     RecalculationResult,
     UnitMatch,
+    VerificationCreate,
+    VerificationRecord,
     WasteDeclaration,
     WasteDeclarationCreate,
 )
 from .repository import Repository, RepositoryConflictError
 from .routing import propose_route
+
+
+DeclarationPath = Annotated[str, Path(pattern=r"^DECL-[A-F0-9]{12}$")]
+LotPath = Annotated[str, Path(pattern=r"^LOT-[A-F0-9]{12}$")]
+CollectionPath = Annotated[str, Path(pattern=r"^COLL-[A-F0-9]{12}$")]
 
 
 def correlation_id() -> str:
@@ -60,13 +78,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository = Repository(settings.db_path)
     evidence_storage = EvidenceStorage(settings.evidence_dir)
     estimator = EstimationEngine(settings.factor_set_path)
+    identities = IdentityDirectory(settings.fixtures_dir / "demo_identities.json")
+    repository.seed_demo_identities(
+        identities.organizations, identities.users, identities.memberships
+    )
+    repository.backfill_declaration_owners(
+        {
+            organization.site_id: organization.id
+            for organization in identities.organizations
+            if organization.site_type == "producer" and organization.site_id
+        }
+    )
+    collaboration = CollaborationService(
+        repository=repository,
+        catalog=catalog,
+        identities=identities,
+        forecast_service=DeterministicDeclarationForecastService(),
+    )
 
     app = FastAPI(
         title="BioLoop CI — API de démonstration",
-        version="0.2.0",
+        version="0.3.0",
         description=(
-            "Tranches verticales locales P1, P2 et P3. Les facteurs et toutes "
-            "les sorties d'estimation restent des simulations illustratives P0."
+            "Démonstrateur local multi-acteurs. L'identité choisie n'est pas une "
+            "authentification de production. Les facteurs, itinéraires et projections "
+            "restent des simulations illustratives P0."
         ),
     )
     app.add_middleware(
@@ -74,12 +110,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=[settings.web_origin],
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "X-Correlation-ID"],
+        allow_headers=["Content-Type", "X-Correlation-ID", "X-Demo-User-ID"],
     )
+
+    def resolve_actor(user_id: str) -> DemoActor:
+        try:
+            return identities.actor(user_id)
+        except IdentityError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    async def current_actor(
+        x_demo_user_id: Annotated[str | None, Header()] = None,
+    ) -> DemoActor:
+        # Compatibilité des deux premières tranches : sans en-tête, le parcours
+        # historique agit comme coordinateur de démonstration.
+        return resolve_actor(x_demo_user_id or DEFAULT_DEMO_USER_ID)
+
+    async def explicit_demo_actor(
+        x_demo_user_id: Annotated[str | None, Header()] = None,
+    ) -> DemoActor:
+        if x_demo_user_id is None:
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "Sélectionnez explicitement une identité de démonstration via "
+                    "X-Demo-User-ID. Ce mécanisme n'est pas une authentification."
+                ),
+            )
+        return resolve_actor(x_demo_user_id)
+
+    def enforce(action) -> None:
+        try:
+            action()
+        except AuthorizationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     @app.get("/health")
     async def health() -> dict:
         return {"status": "ok", "mode": "local-demo", "version": app.version}
+
+    @app.get("/api/v1/demo/actors", response_model=DemoActorCatalog)
+    async def get_demo_actors() -> DemoActorCatalog:
+        return DemoActorCatalog(mode_label=MODE_LABEL, actors=identities.actors)
+
+    @app.get("/api/v1/demo/workspace", response_model=DemoWorkspace)
+    async def get_demo_workspace(
+        as_of: date = Query(default_factory=date.today),
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> DemoWorkspace:
+        try:
+            return collaboration.build_workspace(actor, as_of=as_of)
+        except AuthorizationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    @app.get("/api/v1/demo/notifications")
+    async def get_demo_notifications(
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ):
+        return repository.list_notifications(actor)
 
     @app.get("/api/v1/catalog")
     async def get_catalog() -> dict:
@@ -102,21 +190,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/api/v1/declarations", response_model=list[WasteDeclaration])
-    async def list_declarations() -> list[WasteDeclaration]:
-        return repository.list_declarations()
+    async def list_declarations(
+        actor: DemoActor = Depends(current_actor),
+    ) -> list[WasteDeclaration]:
+        if actor.role == DemoRole.COORDINATOR:
+            return repository.list_declarations()
+        if actor.role == DemoRole.PRODUCER:
+            return repository.list_declarations_for_organization(actor.organization_id)
+        raise HTTPException(
+            status_code=403,
+            detail="Utilisez le portail associé à ce rôle pour consulter ses objets autorisés.",
+        )
 
     @app.post(
         "/api/v1/declarations",
         response_model=WasteDeclaration,
         status_code=201,
     )
-    async def create_declaration(data: WasteDeclarationCreate) -> WasteDeclaration:
+    async def create_declaration(
+        data: WasteDeclarationCreate,
+        actor: DemoActor = Depends(current_actor),
+    ) -> WasteDeclaration:
         producer = catalog.producer(data.producer_id)
         if producer is None:
             raise HTTPException(status_code=404, detail="Producteur fictif inconnu.")
         if catalog.waste_type(data.waste_type_id) is None:
             raise HTTPException(status_code=422, detail="Type de déchet inconnu.")
-        declaration = repository.create_declaration(data, producer)
+        try:
+            owner_organization_id = collaboration.require_create_declaration(
+                actor, data.producer_id
+            )
+        except AuthorizationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        declaration = repository.create_declaration(
+            data, producer, owner_organization_id=owner_organization_id
+        )
         repository.append_audit_event(
             correlation_id=correlation_id(),
             declaration_id=declaration.id,
@@ -127,6 +235,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "proof_level": declaration.proof_level.value,
                 "provenance": declaration.provenance.value,
             },
+            actor=actor,
         )
         return declaration
 
@@ -175,15 +284,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/declarations/{declaration_id}/matches",
         response_model=list[UnitMatch],
     )
-    async def get_matches(declaration_id: str) -> list[UnitMatch]:
-        return compatible_units(require_declaration(declaration_id), catalog)
+    async def get_matches(
+        declaration_id: DeclarationPath,
+        actor: DemoActor = Depends(current_actor),
+    ) -> list[UnitMatch]:
+        declaration = require_declaration(declaration_id)
+        enforce(lambda: collaboration.require_producer_operation(actor, declaration))
+        return compatible_units(declaration, catalog)
 
     @app.post(
         "/api/v1/declarations/{declaration_id}/proposal",
         response_model=Proposal,
     )
-    async def create_proposal(declaration_id: str, data: ProposalCreate) -> Proposal:
+    async def create_proposal(
+        declaration_id: DeclarationPath,
+        data: ProposalCreate,
+        actor: DemoActor = Depends(current_actor),
+    ) -> Proposal:
         declaration = require_declaration(declaration_id)
+        enforce(lambda: collaboration.require_producer_operation(actor, declaration))
         unit = require_compatible_unit(declaration, data.processing_unit_id)
         estimate = estimator.calculate(declaration, unit.id)
         route = propose_route(declaration, unit, estimate.calculation_hash)
@@ -222,6 +341,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "route_id": route.id,
                 "status": route.status,
             },
+            actor=actor,
+        )
+        collaboration.register_proposal(
+            declaration=declaration,
+            route=route,
+            processing_unit_id=unit.id,
+            actor=actor,
+            correlation_id=corr_id,
         )
         return Proposal(
             correlation_id=corr_id,
@@ -237,14 +364,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=201,
     )
     async def create_evidence(
-        declaration_id: str,
+        declaration_id: DeclarationPath,
         request: Request,
         category: EvidenceCategory = Query(...),
         original_filename: str = Query(..., min_length=1, max_length=180),
         captured_at: datetime | None = Query(default=None),
         note: str = Query(default="", max_length=500),
+        actor: DemoActor = Depends(current_actor),
     ) -> EvidenceRecord:
-        require_declaration(declaration_id)
+        declaration = require_declaration(declaration_id)
+        enforce(lambda: collaboration.require_evidence_create(actor, declaration))
         if captured_at and (captured_at.tzinfo is None or captured_at.utcoffset() is None):
             raise HTTPException(
                 status_code=422,
@@ -280,6 +409,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "sha256": evidence.sha256,
                 "size_bytes": evidence.size_bytes,
             },
+            actor=actor,
         )
         return evidence
 
@@ -287,8 +417,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/declarations/{declaration_id}/evidence",
         response_model=list[EvidenceRecord],
     )
-    async def list_evidence(declaration_id: str) -> list[EvidenceRecord]:
-        require_declaration(declaration_id)
+    async def list_evidence(
+        declaration_id: DeclarationPath,
+        actor: DemoActor = Depends(current_actor),
+    ) -> list[EvidenceRecord]:
+        declaration = require_declaration(declaration_id)
+        enforce(lambda: collaboration.require_declaration_read(actor, declaration))
         return repository.list_evidence(declaration_id)
 
     @app.post(
@@ -297,9 +431,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=201,
     )
     async def create_measurement(
-        declaration_id: str, data: MeasurementCreate
+        declaration_id: DeclarationPath,
+        data: MeasurementCreate,
+        actor: DemoActor = Depends(current_actor),
     ) -> MeasurementRecord:
-        require_declaration(declaration_id)
+        declaration = require_declaration(declaration_id)
+        enforce(lambda: collaboration.require_measurement_create(actor, declaration))
         if data.evidence_id:
             evidence = repository.get_evidence(data.evidence_id)
             if evidence is None or evidence.declaration_id != declaration_id:
@@ -327,6 +464,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "quantity_unit": measurement.unit,
                 "supersedes_measurement_id": measurement.supersedes_measurement_id,
             },
+            actor=actor,
         )
         return measurement
 
@@ -334,8 +472,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/declarations/{declaration_id}/measurements",
         response_model=list[MeasurementRecord],
     )
-    async def list_measurements(declaration_id: str) -> list[MeasurementRecord]:
-        require_declaration(declaration_id)
+    async def list_measurements(
+        declaration_id: DeclarationPath,
+        actor: DemoActor = Depends(current_actor),
+    ) -> list[MeasurementRecord]:
+        declaration = require_declaration(declaration_id)
+        enforce(lambda: collaboration.require_declaration_read(actor, declaration))
         return repository.list_measurements(declaration_id)
 
     @app.post(
@@ -343,7 +485,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response_model=LotRecord,
         status_code=201,
     )
-    async def create_lot(declaration_id: str, data: LotCreate) -> LotRecord:
+    async def create_lot(
+        declaration_id: DeclarationPath,
+        data: LotCreate,
+        actor: DemoActor = Depends(current_actor),
+    ) -> LotRecord:
         declaration = require_declaration(declaration_id)
         measurement = require_measurement(data.measurement_id)
         if measurement.declaration_id != declaration_id:
@@ -353,6 +499,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         require_compatible_unit(
             declaration, data.processing_unit_id, measurement.quantity_kg
+        )
+        enforce(
+            lambda: collaboration.require_lot_create(
+                actor, declaration, data.processing_unit_id
+            )
         )
         evidence_ids = list(dict.fromkeys(data.evidence_ids))
         for evidence_id in evidence_ids:
@@ -380,12 +531,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "input_proof_level": ProofLevel.P3.value,
                 "quantity_unit": lot.quantity_unit,
             },
+            actor=actor,
         )
+        collaboration.notify_lot_created(lot, actor)
         return lot
 
     @app.get("/api/v1/lots/{lot_id}", response_model=LotRecord)
-    async def get_lot(lot_id: str) -> LotRecord:
-        return require_lot(lot_id)
+    async def get_lot(
+        lot_id: LotPath,
+        actor: DemoActor = Depends(current_actor),
+    ) -> LotRecord:
+        lot = require_lot(lot_id)
+        enforce(lambda: collaboration.require_lot_read(actor, lot))
+        return lot
 
     @app.post(
         "/api/v1/lots/{lot_id}/decision",
@@ -393,11 +551,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=201,
     )
     async def decide_lot(
-        lot_id: str, data: LotDecisionCreate
+        lot_id: LotPath,
+        data: LotDecisionCreate,
+        actor: DemoActor = Depends(current_actor),
     ) -> LotDecisionRecord:
         lot = require_lot(lot_id)
+        enforce(lambda: collaboration.require_lot_decision(actor, lot))
         try:
-            decision = repository.record_lot_decision(lot, data)
+            decision = repository.record_lot_decision(lot, data, actor)
         except RepositoryConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         repository.append_audit_event(
@@ -412,7 +573,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "processing_unit_id": lot.processing_unit_id,
                 "proof_level": ProofLevel.P1.value,
             },
+            actor=actor,
         )
+        decided_lot = require_lot(lot.id)
+        collaboration.notify_lot_decision(decided_lot, actor)
         return decision
 
     @app.post(
@@ -421,9 +585,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=201,
     )
     async def recalculate_from_measurement(
-        declaration_id: str, data: RecalculationCreate
+        declaration_id: DeclarationPath,
+        data: RecalculationCreate,
+        actor: DemoActor = Depends(current_actor),
     ) -> RecalculationResult:
         declaration = require_declaration(declaration_id)
+        enforce(lambda: collaboration.require_declaration_read(actor, declaration))
         measurement = require_measurement(data.measurement_id)
         if measurement.declaration_id != declaration_id:
             raise HTTPException(
@@ -492,6 +659,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "parent_estimate_run_id": previous.id,
                 "source_measurement_id": measurement.id,
             },
+            actor=actor,
         )
         return RecalculationResult(
             correlation_id=corr_id,
@@ -504,8 +672,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/declarations/{declaration_id}/timeline",
         response_model=DeclarationTimeline,
     )
-    async def get_timeline(declaration_id: str) -> DeclarationTimeline:
+    async def get_timeline(
+        declaration_id: DeclarationPath,
+        actor: DemoActor = Depends(current_actor),
+    ) -> DeclarationTimeline:
         declaration = require_declaration(declaration_id)
+        enforce(lambda: collaboration.require_declaration_read(actor, declaration))
         return DeclarationTimeline(
             declaration=declaration,
             evidence=repository.list_evidence(declaration_id),
@@ -514,6 +686,133 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             estimate_runs=repository.list_estimate_runs(declaration_id),
             estimate_lineage=repository.list_estimate_lineage(declaration_id),
             audit_events=repository.list_audit_events(declaration_id),
+        )
+
+    @app.post(
+        "/api/v1/demo/collections/{collection_id}/confirm",
+        response_model=CollectionRecord,
+    )
+    async def confirm_collection(
+        collection_id: CollectionPath,
+        data: CollectionConfirmCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> CollectionRecord:
+        collection = repository.get_collection(collection_id)
+        if collection is None:
+            raise HTTPException(status_code=404, detail="Collecte introuvable.")
+        enforce(lambda: collaboration.require_collection_confirm(actor, collection))
+        evidence = repository.get_evidence(data.evidence_id)
+        measurement = repository.get_measurement(data.measurement_id)
+        if (
+            evidence is None
+            or evidence.declaration_id != collection.declaration_id
+            or measurement is None
+            or measurement.declaration_id != collection.declaration_id
+            or measurement.evidence_id != evidence.id
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "La preuve P2 et la mesure P3 liée doivent appartenir à la "
+                    "déclaration de cette collecte."
+                ),
+            )
+        try:
+            confirmed = repository.confirm_collection(
+                collection,
+                evidence_id=evidence.id,
+                measurement_id=measurement.id,
+                actor=actor,
+            )
+        except RepositoryConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        corr_id = correlation_id()
+        repository.append_audit_event(
+            correlation_id=corr_id,
+            declaration_id=collection.declaration_id,
+            event_type="collection.confirmed",
+            object_type="collection",
+            object_id=collection.id,
+            payload={
+                "evidence_id": evidence.id,
+                "evidence_proof_level": ProofLevel.P2.value,
+                "measurement_id": measurement.id,
+                "measurement_proof_level": ProofLevel.P3.value,
+            },
+            actor=actor,
+        )
+        return confirmed
+
+    @app.post(
+        "/api/v1/demo/verifications",
+        response_model=VerificationRecord,
+        status_code=201,
+    )
+    async def create_verification(
+        data: VerificationCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> VerificationRecord:
+        enforce(lambda: collaboration.require_controller(actor))
+        lot = require_lot(data.subject_id)
+        existing = repository.verification_by_idempotency_key(data.idempotency_key)
+        if existing is not None:
+            if (
+                existing.subject_id != data.subject_id
+                or existing.outcome != data.outcome
+                or existing.note != data.note
+                or existing.actor_user_id != actor.user_id
+                or existing.actor_organization_id != actor.organization_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Cette clé d'idempotence appartient à un contrôle différent ; "
+                        "l'historique ne peut pas être modifié silencieusement."
+                    ),
+                )
+            return existing
+        verification = repository.create_verification(data, actor)
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            declaration_id=lot.declaration_id,
+            event_type="verification.recorded",
+            object_type=data.subject_type,
+            object_id=data.subject_id,
+            payload={
+                "outcome": data.outcome,
+                "proof_level": ProofLevel.P4.value,
+                "idempotency_key": data.idempotency_key,
+            },
+            actor=actor,
+        )
+        return verification
+
+    @app.get("/api/v1/demo/audit", response_model=list[AuditEventRecord])
+    async def get_demo_audit(
+        actor_user_id: str | None = Query(
+            default=None, pattern=r"^USER-[A-Z0-9-]{3,40}$"
+        ),
+        organization_id: str | None = Query(
+            default=None, pattern=r"^ORG-[A-Z0-9-]{3,40}$"
+        ),
+        object_type: str | None = Query(
+            default=None, pattern=r"^[a-z][a-z0-9_.-]{1,59}$"
+        ),
+        correlation_id_filter: str | None = Query(
+            default=None,
+            alias="correlation_id",
+            pattern=r"^CORR-[A-F0-9]{12}$",
+        ),
+        limit: int = Query(default=100, ge=1, le=500),
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> list[AuditEventRecord]:
+        enforce(lambda: collaboration.require_coordinator(actor))
+        return repository.filter_audit_events(
+            actor_user_id=actor_user_id,
+            organization_id=organization_id,
+            object_type=object_type,
+            correlation_id=correlation_id_filter,
+            limit=limit,
         )
 
     return app

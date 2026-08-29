@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -73,8 +73,8 @@ Frequency = Literal["ponctuelle", "quotidienne", "hebdomadaire"]
 class WasteDeclarationCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    producer_id: str = Field(min_length=1, max_length=40)
-    waste_type_id: str = Field(min_length=1, max_length=60)
+    producer_id: str = Field(pattern=r"^PROD-[0-9]{3}$")
+    waste_type_id: str = Field(pattern=r"^[a-z][a-z0-9_]{2,59}$")
     quantity_kg: Decimal = Field(gt=0, le=50_000, max_digits=10, decimal_places=2)
     frequency: Frequency
     availability_date: date
@@ -83,6 +83,7 @@ class WasteDeclarationCreate(BaseModel):
 
 class WasteDeclaration(WasteDeclarationCreate):
     id: str
+    owner_organization_id: str | None = None
     producer_name: str
     producer_locality: str
     latitude: float
@@ -107,7 +108,7 @@ class UnitMatch(BaseModel):
 
 
 class ProposalCreate(BaseModel):
-    processing_unit_id: str = Field(min_length=1, max_length=40)
+    processing_unit_id: str = Field(pattern=r"^UNIT-[0-9]{3}$")
 
 
 class EstimateScenario(BaseModel):
@@ -219,8 +220,12 @@ class MeasurementCreate(BaseModel):
     method: MeasurementMethod
     measured_at: datetime
     device_reference: str | None = Field(default=None, max_length=100)
-    evidence_id: str | None = Field(default=None, max_length=40)
-    supersedes_measurement_id: str | None = Field(default=None, max_length=40)
+    evidence_id: str | None = Field(
+        default=None, pattern=r"^EVID-[A-F0-9]{24}$"
+    )
+    supersedes_measurement_id: str | None = Field(
+        default=None, pattern=r"^MEAS-[A-F0-9]{12}$"
+    )
     note: str = Field(default="", max_length=500)
 
     @field_validator("measured_at")
@@ -239,12 +244,15 @@ class MeasurementRecord(MeasurementCreate):
     proof_level: ProofLevel = ProofLevel.P3
 
 
+EvidenceId = Annotated[str, Field(pattern=r"^EVID-[A-F0-9]{24}$")]
+
+
 class LotCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    measurement_id: str = Field(min_length=1, max_length=40)
-    processing_unit_id: str = Field(min_length=1, max_length=40)
-    evidence_ids: list[str] = Field(default_factory=list, max_length=20)
+    measurement_id: str = Field(pattern=r"^MEAS-[A-F0-9]{12}$")
+    processing_unit_id: str = Field(pattern=r"^UNIT-[0-9]{3}$")
+    evidence_ids: list[EvidenceId] = Field(default_factory=list, max_length=20)
 
 
 class LotStatusEvent(BaseModel):
@@ -278,8 +286,11 @@ class LotDecisionRecord(BaseModel):
     decided_at: datetime
     reason: str
     note: str
-    actor_label: Literal["Opérateur unité — démonstration non authentifiée"]
+    actor_label: str
     actor_authenticated: Literal[False] = False
+    actor_user_id: str | None = None
+    actor_organization_id: str | None = None
+    actor_role: str | None = None
     provenance: Provenance = Provenance.DECLARED
     proof_level: ProofLevel = ProofLevel.P1
 
@@ -304,8 +315,8 @@ class LotRecord(BaseModel):
 class RecalculationCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    measurement_id: str = Field(min_length=1, max_length=40)
-    processing_unit_id: str = Field(min_length=1, max_length=40)
+    measurement_id: str = Field(pattern=r"^MEAS-[A-F0-9]{12}$")
+    processing_unit_id: str = Field(pattern=r"^UNIT-[0-9]{3}$")
 
 
 class EstimateLineage(BaseModel):
@@ -342,6 +353,9 @@ class AuditEventRecord(BaseModel):
     object_type: str
     object_id: str
     payload: dict
+    actor_user_id: str | None = None
+    actor_organization_id: str | None = None
+    actor_role: str | None = None
     created_at: datetime
 
 
@@ -353,3 +367,200 @@ class DeclarationTimeline(BaseModel):
     estimate_runs: list[EstimateRunSummary]
     estimate_lineage: list[EstimateLineage]
     audit_events: list[AuditEventRecord]
+
+
+class DemoRole(str, Enum):
+    PRODUCER = "producer"
+    LOGISTICIAN = "logistician"
+    UNIT_OPERATOR = "processing_unit_operator"
+    FIELD_CONTROLLER = "field_controller"
+    COORDINATOR = "bioloop_coordinator"
+    CLIENT = "client_farmer"
+
+
+class DemoOrganization(BaseModel):
+    id: str
+    name: str
+    kind: str
+    site_type: Literal["producer", "processing_unit"] | None = None
+    site_id: str | None = None
+    is_demo: Literal[True] = True
+
+
+class DemoUser(BaseModel):
+    id: str
+    display_name: str
+    is_demo: Literal[True] = True
+
+
+class DemoMembership(BaseModel):
+    id: str
+    user_id: str
+    organization_id: str
+    role: DemoRole
+    status: Literal["active"] = "active"
+
+
+class DemoActor(BaseModel):
+    user_id: str
+    display_name: str
+    organization_id: str
+    organization_name: str
+    role: DemoRole
+    site_type: Literal["producer", "processing_unit"] | None = None
+    site_id: str | None = None
+    is_demo: Literal[True] = True
+    authenticated_for_production: Literal[False] = False
+
+
+class DemoActorCatalog(BaseModel):
+    mode_label: Literal["mode démonstration — aucune authentification de production"]
+    actors: list[DemoActor]
+
+
+class NotificationRecord(BaseModel):
+    id: str
+    organization_id: str
+    target_role: DemoRole | None = None
+    event_type: str
+    subject_type: str
+    subject_id: str
+    message: str
+    created_at: datetime
+    read_at: datetime | None = None
+
+
+class CollectionRecord(BaseModel):
+    id: str
+    declaration_id: str
+    route_id: str
+    processing_unit_id: str
+    logistician_organization_id: str
+    status: Literal["assigned", "collected"]
+    scheduled_date: date
+    expected_quantity_kg: Decimal
+    quantity_unit: Literal["kg"] = "kg"
+    total_straight_line_km: Decimal
+    distance_unit: Literal["km géodésiques illustratifs"]
+    route_method: str
+    stops: list[RouteStop]
+    evidence_id: str | None = None
+    measurement_id: str | None = None
+    confirmed_at: datetime | None = None
+    confirmed_by_user_id: str | None = None
+    confirmed_by_organization_id: str | None = None
+    created_at: datetime
+    status_provenance: Provenance = Provenance.DECLARED
+    status_proof_level: ProofLevel = ProofLevel.P1
+    route_provenance: Provenance = Provenance.SIMULATED
+    route_proof_level: ProofLevel = ProofLevel.P0
+    human_validation_required: Literal[True] = True
+
+
+class CollectionConfirmCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    evidence_id: str = Field(min_length=1, max_length=40, pattern=r"^EVID-[A-F0-9]{24}$")
+    measurement_id: str = Field(min_length=1, max_length=40, pattern=r"^MEAS-[A-F0-9]{12}$")
+
+
+class VerificationCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    subject_type: Literal["waste_lot"] = "waste_lot"
+    subject_id: str = Field(min_length=1, max_length=40, pattern=r"^LOT-[A-F0-9]{12}$")
+    outcome: Literal["verified", "non_conform"]
+    note: str = Field(min_length=3, max_length=500)
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
+
+
+class VerificationRecord(BaseModel):
+    id: str
+    subject_type: Literal["waste_lot"]
+    subject_id: str
+    outcome: Literal["verified", "non_conform"]
+    note: str
+    verified_at: datetime
+    actor_user_id: str
+    actor_organization_id: str
+    actor_role: Literal[DemoRole.FIELD_CONTROLLER]
+    provenance: Provenance = Provenance.VERIFIED
+    proof_level: ProofLevel = ProofLevel.P4
+
+
+class ProjectionMetric(BaseModel):
+    value_kg: Decimal
+    basis_provenance: Provenance
+    basis_proof_level: ProofLevel
+    result_provenance: Provenance = Provenance.SIMULATED
+    result_proof_level: ProofLevel = ProofLevel.P0
+
+
+class ProjectionWindow(BaseModel):
+    period_days: Literal[7, 30]
+    declared: ProjectionMetric
+    measured_basis: ProjectionMetric
+    measured_coverage_declarations: int
+
+
+class ForecastReport(BaseModel):
+    processing_unit_id: str
+    as_of: date
+    classification: Literal["projection opérationnelle déterministe — simulation illustrative"]
+    version: str
+    source: str
+    periods: list[ProjectionWindow]
+    limitations: list[str]
+    historical_data_required_before_ml: list[str]
+
+
+class ProducerDeclarationView(BaseModel):
+    declaration: WasteDeclaration
+    proposed_unit_id: str | None = None
+    collection_status: str | None = None
+    lot_status: str | None = None
+    next_action: str
+
+
+class LogisticsCollectionView(BaseModel):
+    collection: CollectionRecord
+    producer_name: str
+    waste_type_name: str
+    processing_unit_name: str
+    available_capacity_kg: Decimal
+    capacity_proof_level: ProofLevel = ProofLevel.P0
+
+
+class IncomingLotView(BaseModel):
+    lot: LotRecord
+    producer_name: str
+    waste_type_name: str
+    compatibility: bool
+    available_capacity_kg: Decimal
+    compatibility_proof_level: ProofLevel = ProofLevel.P0
+
+
+class PendingControlView(BaseModel):
+    lot: LotRecord
+    producer_name: str
+    existing_verification: VerificationRecord | None = None
+
+
+class DemoWorkspace(BaseModel):
+    actor: DemoActor
+    mode_label: Literal["mode démonstration — aucune authentification de production"]
+    permissions: list[str]
+    notifications: list[NotificationRecord]
+    producer_declarations: list[ProducerDeclarationView] = Field(default_factory=list)
+    logistics_collections: list[LogisticsCollectionView] = Field(default_factory=list)
+    incoming_lots: list[IncomingLotView] = Field(default_factory=list)
+    pending_controls: list[PendingControlView] = Field(default_factory=list)
+    projections: list[ForecastReport] = Field(default_factory=list)
+    coordinator_counts: dict[str, int] = Field(default_factory=dict)
+    audit_events: list[AuditEventRecord] = Field(default_factory=list)
+    products: list[dict] = Field(default_factory=list)
+    product_empty_state: str | None = None

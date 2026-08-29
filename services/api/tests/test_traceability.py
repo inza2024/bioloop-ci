@@ -424,6 +424,12 @@ def test_existing_database_schema_is_migrated_without_deletion(tmp_path: Path) -
                 object_id TEXT NOT NULL, payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            INSERT INTO waste_declarations VALUES (
+                'DECL-ABCDEF123456', 'PROD-001', 'Ancien producteur', 'Abobo',
+                'market_organic', '900', 'hebdomadaire', '2026-08-30',
+                'Ligne antérieure à la migration', 5.4161, -4.0159,
+                '2026-08-28T00:00:00+00:00'
+            );
             INSERT INTO audit_events VALUES (
                 'AUD-OLD', 'CORR-OLD', 'legacy.event', 'legacy',
                 'OLD-1', '{}', '2026-08-28T00:00:00+00:00'
@@ -446,7 +452,34 @@ def test_existing_database_schema_is_migrated_without_deletion(tmp_path: Path) -
         legacy_count = connection.execute(
             "SELECT COUNT(*) FROM audit_events WHERE id = 'AUD-OLD'"
         ).fetchone()[0]
+        legacy_declaration = connection.execute(
+            """
+            SELECT notes, owner_organization_id FROM waste_declarations
+            WHERE id = 'DECL-ABCDEF123456'
+            """
+        ).fetchone()
 
-    assert {"evidence", "measurements", "lots", "lot_decisions", "estimate_lineage"}.issubset(tables)
-    assert "declaration_id" in audit_columns
+    assert {
+        "evidence",
+        "measurements",
+        "lots",
+        "lot_decisions",
+        "estimate_lineage",
+        "organizations",
+        "demo_users",
+        "memberships",
+        "collections",
+        "notifications",
+        "verifications",
+    }.issubset(tables)
+    assert {
+        "declaration_id",
+        "actor_user_id",
+        "actor_organization_id",
+        "actor_role",
+    }.issubset(audit_columns)
     assert legacy_count == 1
+    assert legacy_declaration == (
+        "Ligne antérieure à la migration",
+        "ORG-PROD-ABOBO",
+    )

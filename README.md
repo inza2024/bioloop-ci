@@ -1,6 +1,6 @@
-# BioLoop CI — tranches verticales 01 et 02 du MVP
+# BioLoop CI — tranches verticales 01, 02 et 03 du MVP
 
-BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il couvre désormais deux parcours liés : déclarer un gisement et produire une proposition illustrative, puis documenter le gisement, enregistrer une mesure, créer un lot, saisir une décision de l'unité et recalculer sans effacer l'historique.
+BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il relie désormais la déclaration et l'estimation illustrative, la traçabilité P2/P3 du lot, puis une collaboration attribuée entre producteur, logistique, unité, contrôle terrain, coordination et client/agriculteur.
 
 > **Avertissement scientifique** — Aucun résultat affiché n'est un rendement biogaz validé. Le moteur produit des **URI (unités de rendement illustratives)** avec un jeu de multiplicateurs P0 intitulé « simulation illustrative ». Il n'effectue aucune conversion vers `Nm³`, `kWh`, FCFA, digestat, engrais ou crédit environnemental.
 
@@ -18,6 +18,14 @@ BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il couvre 
 - accepter ou refuser le lot avec un acteur de démonstration non authentifié ;
 - conserver le calcul P1 et créer un nouveau calcul lié à la mesure P3 ;
 - consulter la provenance, l'historique de statut et les événements corrélés dans SQLite.
+- sélectionner une identité et une organisation fictives, clairement signalées comme non authentifiées pour la production ;
+- séparer les vues et autorisations des six rôles de démonstration ;
+- persister des notifications internes idempotentes sans service externe ;
+- confirmer une collecte par la logistique avant de créer le lot ;
+- attribuer acceptation/refus à l'opérateur de l'unité destinataire ;
+- créer un événement P4 uniquement avec le rôle contrôleur terrain ;
+- afficher des projections déterministes P0 sur 7 et 30 jours, avec bases P1 et P3 séparées ;
+- présenter au client un état vide honnête tant qu'aucun produit qualifié n'existe.
 
 La démo n'inclut volontairement ni paiement, ni crédit carbone, ni blockchain, ni agent IA autonome, ni authentification de production. Aucun LLM n'intervient dans les calculs.
 
@@ -84,18 +92,18 @@ Les tâches VS Code « BioLoop: API » et « BioLoop: Web » proposent les même
 
 ## Parcours de démonstration
 
-1. Vérifier les huit producteurs et deux unités, marqués P0.
-2. Choisir un producteur fictif et saisir une masse en kilogrammes.
-3. Enregistrer la déclaration : quantité et type deviennent P1, la localisation reste P0.
-4. Sélectionner une unité compatible parmi les résultats P0.
-5. Générer la proposition et vérifier les scénarios, la version, l'empreinte, les hypothèses et la tournée.
-6. Montrer le verrou « validation humaine requise » : aucune collecte n'est déclenchée.
-7. Ajouter une petite image JPEG/PNG ou un PDF : la pièce reste P2.
-8. Saisir une masse mesurée en kilogrammes : la nouvelle donnée est P3, pas P4.
-9. Créer le lot et vérifier qu'il reprend la masse mesurée, pas la masse déclarée.
-10. Accepter ou refuser le lot ; un refus exige un motif et la décision ne peut plus être écrasée.
-11. Recalculer les trois scénarios à partir de la mesure et comparer les deux exécutions.
-12. Lire le journal : les identifiants sont corrélés, le contenu binaire n'est jamais journalisé.
+1. Dans la section 05, sélectionner le producteur Abobo en « mode démonstration ».
+2. Vérifier les huit producteurs et deux unités, marqués P0.
+3. Saisir une masse et enregistrer la déclaration P1 pour son propre site.
+4. Sélectionner une unité compatible puis générer les scénarios et la collecte P0.
+5. Revenir en section 05 et choisir le rôle logistique : la collecte assignée et ses trois arrêts illustratifs apparaissent.
+6. Joindre une pièce, saisir une pesée et confirmer : la pièce reste P2, la masse devient P3, puis le lot est créé.
+7. Choisir l'opérateur d'unité : vérifier compatibilité, capacité P0 et projections 7/30 jours, puis accepter ou refuser le lot.
+8. Choisir le contrôleur : créer l'événement de vérification explicite P4.
+9. Choisir le coordinateur : filtrer le journal par acteur, organisation, objet ou corrélation.
+10. Choisir le client/agriculteur : constater qu'aucun stock ou produit n'est inventé.
+
+Le parcours historique de la section 04 reste disponible pour démontrer séparément preuve P2, mesure P3, lot, décision et recalcul. Sans en-tête de démonstration, ces routes historiques utilisent le coordinateur fictif afin de préserver les tranches 01 et 02.
 
 Pour réinitialiser toutes les données locales, arrêter l'API puis supprimer `data/local/bioloop.db` et le contenu de `data/local/evidence/`. La base et les pièces sont ignorées par Git.
 
@@ -130,6 +138,9 @@ services/api/app/             monolithe FastAPI modulaire
   evidence.py                 contrôle et stockage local des pièces P2
   routing.py                  proposition géodésique simple
   repository.py               migrations SQLite additives et audit append-only
+  identity.py                 identités, organisations et permissions fictives
+  collaboration.py            autorisations et vues de travail par rôle
+  forecasting.py              interface et projection déterministe versionnée
 data/fixtures/                producteurs, unités et types fictifs
 data/factor_sets/             jeu illustratif versionné
 services/api/tests/           tests golden, règles et API
@@ -155,6 +166,12 @@ Le backend est un monolithe modulaire. SQLite accélère la démo locale ; Postg
 | `POST` | `/api/v1/lots/{id}/decision` | acceptation ou refus non écrasable |
 | `POST` | `/api/v1/declarations/{id}/recalculations` | nouvelle estimation liée à une mesure P3 |
 | `GET` | `/api/v1/declarations/{id}/timeline` | provenance et journal corrélé |
+| `GET` | `/api/v1/demo/actors` | catalogue public des identités fictives |
+| `GET` | `/api/v1/demo/workspace` | espace autorisé du rôle sélectionné |
+| `GET` | `/api/v1/demo/notifications` | notifications internes de l'organisation active |
+| `POST` | `/api/v1/demo/collections/{id}/confirm` | collecte liée à une preuve P2 et une mesure P3 |
+| `POST` | `/api/v1/demo/verifications` | événement P4 réservé au contrôleur terrain |
+| `GET` | `/api/v1/demo/audit` | audit filtrable réservé au coordinateur |
 
 Les entrées ont des types, longueurs et bornes explicites. Une unité incompatible est rejetée côté serveur. Les exécutions sont déterministes pour une même masse, un même déchet, une même unité, une même provenance et une même version de facteurs.
 
@@ -170,6 +187,21 @@ Les entrées ont des types, longueurs et bornes explicites. Une unité incompati
 
 Les tables sont créées par migrations additives `CREATE TABLE IF NOT EXISTS` et `ALTER TABLE` ciblé. Une base de la tranche 01 est conservée et enrichie sans suppression.
 
+## Identités et autorisations de démonstration
+
+Le frontend transmet `X-Demo-User-ID`, choisi dans un catalogue JSON fictif. FastAPI résout l'appartenance, applique les autorisations et inscrit utilisateur, organisation et rôle dans chaque nouvel événement d'audit. Ce sélecteur n'est pas une connexion : il n'offre ni mot de passe, ni session signée, ni MFA, ni protection contre l'usurpation.
+
+| Rôle | Lecture | Écriture autorisée |
+|---|---|---|
+| Producteur | ses déclarations uniquement | déclaration de son site, proposition et preuve P2 propre |
+| Logistique | collectes assignées | preuve P2, pesée P3, confirmation puis lot assigné |
+| Opérateur unité | lots de son unité | acceptation ou refus non écrasable |
+| Contrôleur terrain | lots en attente de contrôle | événement de vérification P4 explicite et idempotent |
+| Coordinateur | vue transversale et audit filtrable | opérations de démonstration sur le parcours historique |
+| Client/agriculteur | produits réellement représentés | aucune dans cette tranche |
+
+Les notifications `proposal.available`, `collection.assigned`, `lot.incoming`, `control.required` et `lot.decision_recorded` sont persistées avec une clé de déduplication. Aucun email, SMS ou message externe n'est envoyé.
+
 ## Données et niveaux de preuve
 
 | Niveau | Statut utilisé | Exemple dans cette tranche |
@@ -178,10 +210,12 @@ Les tables sont créées par migrations additives `CREATE TABLE IF NOT EXISTS` e
 | P1 | déclaré | masse et type saisis par l'utilisateur |
 | P2 | documenté | pièce JPEG/PNG/PDF fournie, empreinte et métadonnées |
 | P3 | mesuré | pesée saisie avec méthode, heure et appareil facultatif |
-| P4 | vérifié | défini dans la légende, pas encore collecté |
+| P4 | vérifié | événement séparé créé par le contrôleur terrain fictif autorisé |
 | P5 | certifié | défini dans la légende, pas encore collecté |
 
-Le niveau d'un résultat dérivé ne dépasse pas son intrant le moins probant. Les scénarios restent donc P0 même lorsque leur masse d'entrée est mesurée P3. Une décision d'unité est P1 dans cette démo car l'acteur n'est pas authentifié ; elle ne constitue jamais un contrôle P4.
+Le niveau d'un résultat dérivé ne dépasse pas son intrant le moins probant. Les scénarios restent donc P0 même lorsque leur masse d'entrée est mesurée P3. Une décision d'unité reste P1 car l'identité de démonstration n'est pas une authentification de production ; seul l'événement de contrôle séparé est P4.
+
+Les projections 7/30 jours sont des agrégations mécaniques P0. Elles prolongent la cadence déclarée et affichent séparément la base P1 et la dernière masse P3 disponible. La version actuelle est `deterministic-declaration-cadence-v1` : aucun LLM et aucun modèle prédictif n'intervient.
 
 ## Limites scientifiques et opérationnelles
 
@@ -192,11 +226,14 @@ Le niveau d'un résultat dérivé ne dépasse pas son intrant le moins probant. 
 - La distance haversine n'est ni une distance routière, ni une optimisation de tournée, ni une estimation de coût.
 - Une preuve P2 et une mesure P3 sont des saisies de démonstration : aucune analyse qualité ou validation terrain indépendante n'est encore liée.
 - Le stockage de pièces local n'inclut ni antivirus, ni stockage objet, ni URL temporaire ; ces contrôles sont requis avant pilote.
-- L'acteur de décision n'est pas authentifié et son acceptation/refus ne vaut pas vérification P4.
-- L'audit local est minimal et ne remplace pas les contrôles d'accès, signatures et sauvegardes d'un environnement de production.
+- Les identités sont sélectionnables par en-tête et ne sont pas authentifiées ; elles servent à démontrer l'autorisation, l'attribution et l'audit, pas la sécurité de production.
+- Le rôle contrôleur permet un événement P4 dans ce modèle, mais aucune qualification, signature professionnelle ou certification P5 n'est fournie.
+- Les projections ne modélisent ni saisonnalité, contamination, disponibilité, probabilité d'acceptation, temps routier ni production réelle.
+- Avant tout apprentissage, il faudra un historique de masses déclarées/mesurées, fréquences, saisons, déchets, contaminations, acceptations/refus, temps de collecte, capacités et productions réellement mesurées.
+- L'audit local ne remplace pas session signée, RBAC administrable, journal inviolable, sauvegardes et supervision d'un environnement de production.
 
 La règle de crédibilité et le périmètre fonctionnel proviennent de `outputs/BioLoop_CI_MVP_Hackathon_SIREXE_2026.md`. Les fichiers de recherche restent inchangés.
 
 ## Prochaine tranche recommandée
 
-Ajouter une **validation P4 réellement contrôlée** : identité et rôles de démonstration, séparation producteur/unité, approbation explicite, contrôle d'accès horizontal, rapport de lot et politique de rétention des pièces. Cette étape doit précéder toute allégation scientifique, transaction ou intégration externe.
+Ajouter une tranche **transformation mesurée → produit qualifié → disponibilité client**. Elle devra enregistrer entrées, pertes et sorties réellement mesurées, critères qualité, statut de libération, stock disponible et provenance, sans déduire un rendement scientifique des URI illustratives. L'authentification de production, la rétention des pièces et le stockage objet sécurisé restent des prérequis distincts avant pilote.

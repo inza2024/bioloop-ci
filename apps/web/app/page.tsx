@@ -2,10 +2,12 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { MultiActorPortals } from "./multi-actor-portals";
 import { TraceabilityWorkflow } from "./traceability-workflow";
 import type {
   Catalog,
   Declaration,
+  DemoActor,
   ProcessingUnit,
   Proposal,
   UnitMatch,
@@ -76,6 +78,7 @@ export default function Home() {
   const [selectedUnitId, setSelectedUnitId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [demoActor, setDemoActor] = useState<DemoActor | null>(null);
 
   useEffect(() => {
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
@@ -90,6 +93,14 @@ export default function Home() {
       })
       .catch((reason: Error) => setError(reason.message));
   }, []);
+
+  useEffect(() => {
+    if (demoActor?.role === "producer" && demoActor.site_id) {
+      handleProducerChange(demoActor.site_id);
+    }
+  // handleProducerChange only derives fixture state; catalog changes are handled above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoActor]);
 
   const selectedProducer = useMemo(
     () => catalog?.producers.find((producer) => producer.id === producerId),
@@ -115,8 +126,8 @@ export default function Home() {
         frequency,
         availability_date: availabilityDate,
         notes,
-      });
-      const compatible = await api.matches(created.id);
+      }, demoActor?.user_id);
+      const compatible = await api.matches(created.id, demoActor?.user_id);
       setDeclaration(created);
       setMatches(compatible);
       setSelectedUnitId(compatible[0]?.processing_unit_id ?? "");
@@ -132,7 +143,7 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      setProposal(await api.proposal(declaration.id, selectedUnitId));
+      setProposal(await api.proposal(declaration.id, selectedUnitId, demoActor?.user_id));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Erreur inattendue");
     } finally {
@@ -152,7 +163,7 @@ export default function Home() {
         </nav>
         <div className="hero-grid" id="top">
           <div>
-            <span className="eyebrow">SIREXE Hackathon 2026 · tranches verticales 01 + 02</span>
+            <span className="eyebrow">SIREXE Hackathon 2026 · tranches verticales 01 + 02 + 03</span>
             <h1>Du gisement déclaré au lot <span>traçable.</span></h1>
             <p className="hero-copy">
               Un parcours local pour déclarer un déchet organique, identifier une unité
@@ -252,7 +263,7 @@ export default function Home() {
               <div className="step-title"><span>1</span><div><small>DONNÉE P1</small><h3>Déclarer un gisement</h3></div></div>
               <label>
                 Producteur fictif
-                <select value={producerId} onChange={(event) => handleProducerChange(event.target.value)} required>
+                <select value={producerId} onChange={(event) => handleProducerChange(event.target.value)} disabled={demoActor?.role === "producer"} required>
                   {catalog?.producers.map((producer) => (
                     <option value={producer.id} key={producer.id}>{producer.name} — {producer.locality}</option>
                   ))}
@@ -399,6 +410,8 @@ export default function Home() {
       {proposal && declaration && (
         <TraceabilityWorkflow declaration={declaration} proposal={proposal} />
       )}
+
+      <MultiActorPortals onActorChange={setDemoActor} />
 
       <footer>
         <div className="section-shell footer-shell">

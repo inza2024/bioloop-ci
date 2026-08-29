@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -10,6 +11,12 @@ from uuid import uuid4
 from .evidence import StoredEvidence
 from .models import (
     AuditEventRecord,
+    CollectionRecord,
+    DemoActor,
+    DemoMembership,
+    DemoOrganization,
+    DemoRole,
+    DemoUser,
     EstimateLineage,
     EstimateRunSummary,
     EvidenceLabel,
@@ -20,8 +27,13 @@ from .models import (
     LotStatusEvent,
     MeasurementCreate,
     MeasurementRecord,
+    NotificationRecord,
     ProofLevel,
     Provenance,
+    RoutePlan,
+    RouteStop,
+    VerificationCreate,
+    VerificationRecord,
     WasteDeclaration,
     WasteDeclarationCreate,
 )
@@ -181,10 +193,106 @@ class Repository:
                     FOREIGN KEY (parent_estimate_run_id) REFERENCES estimate_runs(id),
                     FOREIGN KEY (source_measurement_id) REFERENCES measurements(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS organizations (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    site_type TEXT,
+                    site_id TEXT,
+                    is_demo INTEGER NOT NULL CHECK (is_demo = 1)
+                );
+
+                CREATE TABLE IF NOT EXISTS demo_users (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    is_demo INTEGER NOT NULL CHECK (is_demo = 1)
+                );
+
+                CREATE TABLE IF NOT EXISTS memberships (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    organization_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status = 'active'),
+                    UNIQUE (user_id, organization_id, role),
+                    FOREIGN KEY (user_id) REFERENCES demo_users(id),
+                    FOREIGN KEY (organization_id) REFERENCES organizations(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS collections (
+                    id TEXT PRIMARY KEY,
+                    declaration_id TEXT NOT NULL,
+                    route_id TEXT NOT NULL UNIQUE,
+                    processing_unit_id TEXT NOT NULL,
+                    logistician_organization_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('assigned', 'collected')),
+                    scheduled_date TEXT NOT NULL,
+                    expected_quantity_kg TEXT NOT NULL,
+                    quantity_unit TEXT NOT NULL CHECK (quantity_unit = 'kg'),
+                    total_straight_line_km TEXT NOT NULL,
+                    distance_unit TEXT NOT NULL,
+                    route_method TEXT NOT NULL,
+                    stops_json TEXT NOT NULL,
+                    evidence_id TEXT,
+                    measurement_id TEXT,
+                    confirmed_at TEXT,
+                    confirmed_by_user_id TEXT,
+                    confirmed_by_organization_id TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (declaration_id) REFERENCES waste_declarations(id),
+                    FOREIGN KEY (logistician_organization_id) REFERENCES organizations(id),
+                    FOREIGN KEY (evidence_id) REFERENCES evidence(id),
+                    FOREIGN KEY (measurement_id) REFERENCES measurements(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id TEXT PRIMARY KEY,
+                    organization_id TEXT NOT NULL,
+                    target_role TEXT,
+                    event_type TEXT NOT NULL,
+                    subject_type TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    dedup_key TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    read_at TEXT,
+                    FOREIGN KEY (organization_id) REFERENCES organizations(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS verifications (
+                    id TEXT PRIMARY KEY,
+                    subject_type TEXT NOT NULL CHECK (subject_type = 'waste_lot'),
+                    subject_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK (outcome IN ('verified', 'non_conform')),
+                    note TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    actor_user_id TEXT NOT NULL,
+                    actor_organization_id TEXT NOT NULL,
+                    actor_role TEXT NOT NULL CHECK (actor_role = 'field_controller'),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (actor_user_id) REFERENCES demo_users(id),
+                    FOREIGN KEY (actor_organization_id) REFERENCES organizations(id)
+                );
                 """
             )
+            if "owner_organization_id" not in self._columns(
+                connection, "waste_declarations"
+            ):
+                connection.execute(
+                    "ALTER TABLE waste_declarations ADD COLUMN owner_organization_id TEXT"
+                )
             if "declaration_id" not in self._columns(connection, "audit_events"):
                 connection.execute("ALTER TABLE audit_events ADD COLUMN declaration_id TEXT")
+            for column in ("actor_user_id", "actor_organization_id", "actor_role"):
+                if column not in self._columns(connection, "audit_events"):
+                    connection.execute(
+                        f"ALTER TABLE audit_events ADD COLUMN {column} TEXT"
+                    )
+                if column not in self._columns(connection, "lot_decisions"):
+                    connection.execute(
+                        f"ALTER TABLE lot_decisions ADD COLUMN {column} TEXT"
+                    )
             connection.executescript(
                 """
                 CREATE INDEX IF NOT EXISTS idx_evidence_declaration
@@ -197,10 +305,99 @@ class Repository:
                     ON estimate_runs(declaration_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_audit_declaration
                     ON audit_events(declaration_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_declarations_owner
+                    ON waste_declarations(owner_organization_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_collections_logistician
+                    ON collections(logistician_organization_id, status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_collections_unit
+                    ON collections(processing_unit_id, status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_notifications_target
+                    ON notifications(organization_id, target_role, created_at);
+                CREATE INDEX IF NOT EXISTS idx_verifications_subject
+                    ON verifications(subject_type, subject_id, verified_at);
+                CREATE INDEX IF NOT EXISTS idx_audit_actor
+                    ON audit_events(actor_user_id, actor_organization_id, created_at);
                 """
             )
 
-    def create_declaration(self, data: WasteDeclarationCreate, producer) -> WasteDeclaration:
+    def seed_demo_identities(
+        self,
+        organizations: list[DemoOrganization],
+        users: list[DemoUser],
+        memberships: list[DemoMembership],
+    ) -> None:
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO organizations (id, name, kind, site_type, site_id, is_demo)
+                VALUES (?, ?, ?, ?, ?, 1)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    kind = excluded.kind,
+                    site_type = excluded.site_type,
+                    site_id = excluded.site_id
+                """,
+                [
+                    (
+                        item.id,
+                        item.name,
+                        item.kind,
+                        item.site_type,
+                        item.site_id,
+                    )
+                    for item in organizations
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO demo_users (id, display_name, is_demo)
+                VALUES (?, ?, 1)
+                ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name
+                """,
+                [(item.id, item.display_name) for item in users],
+            )
+            connection.executemany(
+                """
+                INSERT INTO memberships (id, user_id, organization_id, role, status)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    organization_id = excluded.organization_id,
+                    role = excluded.role,
+                    status = excluded.status
+                """,
+                [
+                    (
+                        item.id,
+                        item.user_id,
+                        item.organization_id,
+                        item.role.value,
+                        item.status,
+                    )
+                    for item in memberships
+                ],
+            )
+
+    def backfill_declaration_owners(self, producer_organizations: dict[str, str]) -> None:
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                UPDATE waste_declarations
+                SET owner_organization_id = ?
+                WHERE producer_id = ? AND owner_organization_id IS NULL
+                """,
+                [
+                    (organization_id, producer_id)
+                    for producer_id, organization_id in producer_organizations.items()
+                ],
+            )
+
+    def create_declaration(
+        self,
+        data: WasteDeclarationCreate,
+        producer,
+        owner_organization_id: str | None = None,
+    ) -> WasteDeclaration:
         declaration_id = f"DECL-{uuid4().hex[:12].upper()}"
         created_at = datetime.now(UTC)
         with self._connect() as connection:
@@ -209,8 +406,8 @@ class Repository:
                 INSERT INTO waste_declarations (
                     id, producer_id, producer_name, producer_locality,
                     waste_type_id, quantity_kg, frequency, availability_date,
-                    notes, latitude, longitude, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    notes, latitude, longitude, created_at, owner_organization_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     declaration_id,
@@ -225,6 +422,7 @@ class Repository:
                     producer.latitude,
                     producer.longitude,
                     created_at.isoformat(),
+                    owner_organization_id,
                 ),
             )
         declaration = self.get_declaration(declaration_id)
@@ -245,10 +443,24 @@ class Repository:
             ).fetchall()
         return [self._to_declaration(row) for row in rows]
 
+    def list_declarations_for_organization(
+        self, organization_id: str
+    ) -> list[WasteDeclaration]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM waste_declarations
+                WHERE owner_organization_id = ? ORDER BY created_at DESC
+                """,
+                (organization_id,),
+            ).fetchall()
+        return [self._to_declaration(row) for row in rows]
+
     @staticmethod
     def _to_declaration(row: sqlite3.Row) -> WasteDeclaration:
         return WasteDeclaration(
             id=row["id"],
+            owner_organization_id=row["owner_organization_id"],
             producer_id=row["producer_id"],
             producer_name=row["producer_name"],
             producer_locality=row["producer_locality"],
@@ -388,6 +600,17 @@ class Repository:
             ).fetchall()
         return [self._to_measurement(row) for row in rows]
 
+    def latest_measurement(self, declaration_id: str) -> MeasurementRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM measurements
+                WHERE declaration_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+                """,
+                (declaration_id,),
+            ).fetchone()
+        return self._to_measurement(row) if row else None
+
     @staticmethod
     def _to_measurement(row: sqlite3.Row) -> MeasurementRecord:
         return MeasurementRecord(
@@ -479,6 +702,24 @@ class Repository:
             ).fetchall()
         return [self._to_lot(row) for row in rows]
 
+    def list_lots_for_unit(self, processing_unit_id: str) -> list[LotRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM lots WHERE processing_unit_id = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (processing_unit_id,),
+            ).fetchall()
+        return [self._to_lot(row) for row in rows]
+
+    def list_all_lots(self) -> list[LotRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM lots ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        return [self._to_lot(row) for row in rows]
+
     def _to_lot(self, row: sqlite3.Row) -> LotRecord:
         with self._connect() as connection:
             evidence_ids = [
@@ -504,10 +745,14 @@ class Repository:
         )
 
     def record_lot_decision(
-        self, lot: LotRecord, data: LotDecisionCreate
+        self,
+        lot: LotRecord,
+        data: LotDecisionCreate,
+        actor: DemoActor | None = None,
     ) -> LotDecisionRecord:
         decision_id = f"DEC-{uuid4().hex[:12].upper()}"
         decided_at = datetime.now(UTC)
+        actor_label = actor.display_name if actor else DEMO_UNIT_ACTOR
         try:
             with self._connect() as connection:
                 cursor = connection.execute(
@@ -522,8 +767,9 @@ class Repository:
                     """
                     INSERT INTO lot_decisions (
                         id, lot_id, processing_unit_id, decision, decided_at,
-                        reason, note, actor_label, actor_authenticated
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+                        reason, note, actor_label, actor_authenticated,
+                        actor_user_id, actor_organization_id, actor_role
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
                     """,
                     (
                         decision_id,
@@ -533,7 +779,10 @@ class Repository:
                         decided_at.isoformat(),
                         data.reason,
                         data.note,
-                        DEMO_UNIT_ACTOR,
+                        actor_label,
+                        actor.user_id if actor else None,
+                        actor.organization_id if actor else None,
+                        actor.role.value if actor else None,
                     ),
                 )
                 connection.execute(
@@ -547,7 +796,7 @@ class Repository:
                         lot.id,
                         data.decision,
                         decided_at.isoformat(),
-                        DEMO_UNIT_ACTOR,
+                        actor_label,
                         data.reason or data.note or "Décision de démonstration enregistrée.",
                     ),
                 )
@@ -576,6 +825,9 @@ class Repository:
             note=row["note"],
             actor_label=row["actor_label"],
             actor_authenticated=False,
+            actor_user_id=row["actor_user_id"],
+            actor_organization_id=row["actor_organization_id"],
+            actor_role=row["actor_role"],
         )
 
     def list_lot_status_events(self, lot_id: str) -> list[LotStatusEvent]:
@@ -595,6 +847,314 @@ class Repository:
             )
             for row in rows
         ]
+
+    def create_collection_assignment(
+        self,
+        *,
+        declaration: WasteDeclaration,
+        route: RoutePlan,
+        processing_unit_id: str,
+        logistician_organization_id: str,
+    ) -> CollectionRecord:
+        digest = hashlib.sha256(
+            f"{route.id}:{logistician_organization_id}".encode("utf-8")
+        ).hexdigest()
+        collection_id = f"COLL-{digest[:12].upper()}"
+        created_at = datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO collections (
+                    id, declaration_id, route_id, processing_unit_id,
+                    logistician_organization_id, status, scheduled_date,
+                    expected_quantity_kg, quantity_unit,
+                    total_straight_line_km, distance_unit, route_method,
+                    stops_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, 'kg', ?, ?, ?, ?, ?)
+                """,
+                (
+                    collection_id,
+                    declaration.id,
+                    route.id,
+                    processing_unit_id,
+                    logistician_organization_id,
+                    route.scheduled_date.isoformat(),
+                    str(route.quantity_kg),
+                    str(route.total_straight_line_km),
+                    route.distance_unit,
+                    route.method,
+                    json.dumps(
+                        [stop.model_dump(mode="json") for stop in route.stops],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    created_at.isoformat(),
+                ),
+            )
+        collection = self.get_collection(collection_id)
+        assert collection is not None
+        return collection
+
+    def get_collection(self, collection_id: str) -> CollectionRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM collections WHERE id = ?", (collection_id,)
+            ).fetchone()
+        return self._to_collection(row) if row else None
+
+    def collection_for_declaration(
+        self, declaration_id: str, processing_unit_id: str | None = None
+    ) -> CollectionRecord | None:
+        query = "SELECT * FROM collections WHERE declaration_id = ?"
+        params: list[str] = [declaration_id]
+        if processing_unit_id:
+            query += " AND processing_unit_id = ?"
+            params.append(processing_unit_id)
+        query += " ORDER BY created_at DESC, id DESC LIMIT 1"
+        with self._connect() as connection:
+            row = connection.execute(query, params).fetchone()
+        return self._to_collection(row) if row else None
+
+    def list_collections_for_logistician(
+        self, organization_id: str
+    ) -> list[CollectionRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM collections
+                WHERE logistician_organization_id = ?
+                ORDER BY scheduled_date, created_at, id
+                """,
+                (organization_id,),
+            ).fetchall()
+        return [self._to_collection(row) for row in rows]
+
+    def list_collections_for_unit(
+        self, processing_unit_id: str
+    ) -> list[CollectionRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM collections WHERE processing_unit_id = ?
+                ORDER BY scheduled_date, created_at, id
+                """,
+                (processing_unit_id,),
+            ).fetchall()
+        return [self._to_collection(row) for row in rows]
+
+    def list_collections(self) -> list[CollectionRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM collections ORDER BY scheduled_date, created_at, id"
+            ).fetchall()
+        return [self._to_collection(row) for row in rows]
+
+    def confirm_collection(
+        self,
+        collection: CollectionRecord,
+        *,
+        evidence_id: str,
+        measurement_id: str,
+        actor: DemoActor,
+    ) -> CollectionRecord:
+        confirmed_at = datetime.now(UTC)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE collections
+                SET status = 'collected', evidence_id = ?, measurement_id = ?,
+                    confirmed_at = ?, confirmed_by_user_id = ?,
+                    confirmed_by_organization_id = ?
+                WHERE id = ? AND status = 'assigned'
+                """,
+                (
+                    evidence_id,
+                    measurement_id,
+                    confirmed_at.isoformat(),
+                    actor.user_id,
+                    actor.organization_id,
+                    collection.id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RepositoryConflictError(
+                    "Cette collecte est déjà confirmée et ne peut pas être écrasée."
+                )
+        updated = self.get_collection(collection.id)
+        assert updated is not None
+        return updated
+
+    @staticmethod
+    def _to_collection(row: sqlite3.Row) -> CollectionRecord:
+        is_confirmed = row["status"] == "collected"
+        return CollectionRecord(
+            id=row["id"],
+            declaration_id=row["declaration_id"],
+            route_id=row["route_id"],
+            processing_unit_id=row["processing_unit_id"],
+            logistician_organization_id=row["logistician_organization_id"],
+            status=row["status"],
+            scheduled_date=row["scheduled_date"],
+            expected_quantity_kg=Decimal(row["expected_quantity_kg"]),
+            quantity_unit=row["quantity_unit"],
+            total_straight_line_km=Decimal(row["total_straight_line_km"]),
+            distance_unit=row["distance_unit"],
+            route_method=row["route_method"],
+            stops=[RouteStop.model_validate(item) for item in json.loads(row["stops_json"])],
+            evidence_id=row["evidence_id"],
+            measurement_id=row["measurement_id"],
+            confirmed_at=row["confirmed_at"],
+            confirmed_by_user_id=row["confirmed_by_user_id"],
+            confirmed_by_organization_id=row["confirmed_by_organization_id"],
+            created_at=row["created_at"],
+            status_provenance=(
+                Provenance.DECLARED if is_confirmed else Provenance.SIMULATED
+            ),
+            status_proof_level=ProofLevel.P1 if is_confirmed else ProofLevel.P0,
+        )
+
+    def create_notification(
+        self,
+        *,
+        organization_id: str,
+        target_role: DemoRole | None,
+        event_type: str,
+        subject_type: str,
+        subject_id: str,
+        message: str,
+        dedup_key: str,
+    ) -> NotificationRecord:
+        notification_id = f"NOTIF-{hashlib.sha256(dedup_key.encode('utf-8')).hexdigest()[:12].upper()}"
+        created_at = datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO notifications (
+                    id, organization_id, target_role, event_type, subject_type,
+                    subject_id, message, dedup_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    notification_id,
+                    organization_id,
+                    target_role.value if target_role else None,
+                    event_type,
+                    subject_type,
+                    subject_id,
+                    message,
+                    dedup_key,
+                    created_at.isoformat(),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM notifications WHERE dedup_key = ?", (dedup_key,)
+            ).fetchone()
+        assert row is not None
+        return self._to_notification(row)
+
+    def list_notifications(self, actor: DemoActor) -> list[NotificationRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM notifications
+                WHERE organization_id = ?
+                  AND (target_role IS NULL OR target_role = ?)
+                ORDER BY created_at DESC, id DESC
+                """,
+                (actor.organization_id, actor.role.value),
+            ).fetchall()
+        return [self._to_notification(row) for row in rows]
+
+    @staticmethod
+    def _to_notification(row: sqlite3.Row) -> NotificationRecord:
+        return NotificationRecord(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            target_role=row["target_role"],
+            event_type=row["event_type"],
+            subject_type=row["subject_type"],
+            subject_id=row["subject_id"],
+            message=row["message"],
+            created_at=row["created_at"],
+            read_at=row["read_at"],
+        )
+
+    def create_verification(
+        self, data: VerificationCreate, actor: DemoActor
+    ) -> VerificationRecord:
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT * FROM verifications WHERE idempotency_key = ?",
+                (data.idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                return self._to_verification(existing)
+            verification_id = f"VER-{uuid4().hex[:12].upper()}"
+            verified_at = datetime.now(UTC)
+            connection.execute(
+                """
+                INSERT INTO verifications (
+                    id, subject_type, subject_id, outcome, note, verified_at,
+                    actor_user_id, actor_organization_id, actor_role,
+                    idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    verification_id,
+                    data.subject_type,
+                    data.subject_id,
+                    data.outcome,
+                    data.note,
+                    verified_at.isoformat(),
+                    actor.user_id,
+                    actor.organization_id,
+                    actor.role.value,
+                    data.idempotency_key,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM verifications WHERE id = ?", (verification_id,)
+            ).fetchone()
+        assert row is not None
+        return self._to_verification(row)
+
+    def verification_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> VerificationRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM verifications WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return self._to_verification(row) if row else None
+
+    def latest_verification(
+        self, subject_type: str, subject_id: str
+    ) -> VerificationRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM verifications
+                WHERE subject_type = ? AND subject_id = ?
+                ORDER BY verified_at DESC, id DESC LIMIT 1
+                """,
+                (subject_type, subject_id),
+            ).fetchone()
+        return self._to_verification(row) if row else None
+
+    @staticmethod
+    def _to_verification(row: sqlite3.Row) -> VerificationRecord:
+        return VerificationRecord(
+            id=row["id"],
+            subject_type=row["subject_type"],
+            subject_id=row["subject_id"],
+            outcome=row["outcome"],
+            note=row["note"],
+            verified_at=row["verified_at"],
+            actor_user_id=row["actor_user_id"],
+            actor_organization_id=row["actor_organization_id"],
+            actor_role=row["actor_role"],
+        )
 
     def save_estimate_run(
         self,
@@ -735,14 +1295,16 @@ class Repository:
         object_id: str,
         payload: dict,
         declaration_id: str | None = None,
+        actor: DemoActor | None = None,
     ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO audit_events (
                     id, correlation_id, event_type, object_type,
-                    object_id, payload, created_at, declaration_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    object_id, payload, created_at, declaration_id,
+                    actor_user_id, actor_organization_id, actor_role
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     f"AUD-{uuid4().hex[:12].upper()}",
@@ -753,6 +1315,9 @@ class Repository:
                     json.dumps(payload, ensure_ascii=False, sort_keys=True),
                     datetime.now(UTC).isoformat(),
                     declaration_id,
+                    actor.user_id if actor else None,
+                    actor.organization_id if actor else None,
+                    actor.role.value if actor else None,
                 ),
             )
 
@@ -774,7 +1339,73 @@ class Repository:
                 object_type=row["object_type"],
                 object_id=row["object_id"],
                 payload=json.loads(row["payload"]),
+                actor_user_id=row["actor_user_id"],
+                actor_organization_id=row["actor_organization_id"],
+                actor_role=row["actor_role"],
                 created_at=row["created_at"],
             )
             for row in rows
         ]
+
+    def filter_audit_events(
+        self,
+        *,
+        actor_user_id: str | None = None,
+        organization_id: str | None = None,
+        object_type: str | None = None,
+        correlation_id: str | None = None,
+        limit: int = 100,
+    ) -> list[AuditEventRecord]:
+        clauses: list[str] = []
+        parameters: list[str | int] = []
+        for column, value in (
+            ("actor_user_id", actor_user_id),
+            ("actor_organization_id", organization_id),
+            ("object_type", object_type),
+            ("correlation_id", correlation_id),
+        ):
+            if value:
+                clauses.append(f"{column} = ?")
+                parameters.append(value)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        parameters.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM audit_events {where_clause}
+                ORDER BY created_at DESC, id DESC LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [
+            AuditEventRecord(
+                id=row["id"],
+                correlation_id=row["correlation_id"],
+                declaration_id=row["declaration_id"],
+                event_type=row["event_type"],
+                object_type=row["object_type"],
+                object_id=row["object_id"],
+                payload=json.loads(row["payload"]),
+                actor_user_id=row["actor_user_id"],
+                actor_organization_id=row["actor_organization_id"],
+                actor_role=row["actor_role"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def coordinator_counts(self) -> dict[str, int]:
+        with self._connect() as connection:
+            return {
+                table: connection.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone()[0]
+                for table in (
+                    "waste_declarations",
+                    "collections",
+                    "lots",
+                    "lot_decisions",
+                    "verifications",
+                    "notifications",
+                )
+            }

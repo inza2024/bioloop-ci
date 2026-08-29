@@ -1,4 +1,4 @@
-# Dictionnaire de données — tranches verticales 01 et 02
+# Dictionnaire de données — tranches verticales 01, 02 et 03
 
 | Champ | Unité | Provenance | Preuve | Règle |
 |---|---|---|---|---|
@@ -23,7 +23,26 @@
 | décision de lot | texte/horodatage | déclaré par acteur non authentifié | P1 | motif obligatoire pour refus ; jamais P4 |
 | `estimate_lineage` | identifiants | audit | P0/P3 | parent P1, enfant recalculé, mesure P3 source |
 | scénario recalculé | URI | simulé | P0 | masse P3 × multiplicateur P0 ; sortie toujours P0 |
+| `organization.id` | identifiant `ORG-*` | fictif | P0 | organisation isolant la portée des données privées |
+| `demo_user.id` | identifiant `USER-*` | fictif | P0 | identité sélectionnable ; aucune authentification de production |
+| `membership.role` | rôle contrôlé | fictif | P0 | une appartenance active par utilisateur de démonstration |
+| `waste_declaration.owner_organization_id` | identifiant | attribution | P1 | déduit du site producteur ; filtre horizontal côté API |
+| `collection.status` | `assigned` / `collected` | simulé puis déclaré par acteur | P0 puis P1 | affectation illustrative ; transition unique confirmée par la logistique assignée |
+| `collection.stops` | séquence ordonnée | simulé | P0 | trois arrêts déterministes ; pas un itinéraire routier |
+| `collection.total_straight_line_km` | km géodésiques illustratifs | simulé | P0 | aller-retour haversine soumis à validation humaine |
+| `notification.dedup_key` | empreinte interne | événement | sans niveau métier | unicité SQLite ; empêche le doublon d'un même événement métier |
+| `audit.actor_user_id` | identifiant | attribution | P0/P1/P2/P3/P4 selon événement | acteur fictif ayant déclenché l'opération |
+| `audit.actor_organization_id` | identifiant | attribution | idem événement | organisation portée dans l'audit append-only |
+| `verification.outcome` | `verified` / `non_conform` | vérifié | P4 | ligne séparée, horodatée, réservée au contrôleur terrain |
+| `verification.idempotency_key` | texte contrôlé | événement | P4 | une relance renvoie le même contrôle sans dupliquer l'événement |
+| projection `declared.value_kg` | kg attendus | base déclarée P1, résultat simulé | P0 | cadence P1 prolongée mécaniquement sur 7 ou 30 jours |
+| projection `measured_basis.value_kg` | kg attendus | base mesurée P3, résultat simulé | P0 | dernière mesure P3 multipliée par la même cadence déclarée |
+| `forecast.version` | identifiant | configuration | P0 | `deterministic-declaration-cadence-v1`, sans apprentissage ni LLM |
 
 ## Invariant de preuve
 
-Une donnée ne monte jamais automatiquement de niveau : une pièce reste P2, une pesée saisie reste P3 et une décision non authentifiée reste P1. Le calcul dérivé conserve le niveau le plus faible de ses entrées ; les scénarios restent P0 à cause des facteurs illustratifs. Aucun élément ne peut être publié comme vérifié P4 ou certifié P5.
+Une donnée ne monte jamais automatiquement de niveau : une pièce reste P2, une pesée saisie reste P3 et une décision d'une identité non authentifiée reste P1. Le calcul dérivé conserve le niveau le plus faible de ses entrées ; scénarios et projections restent P0 à cause des règles illustratives. Seule une ligne `verification` séparée, créée par le rôle contrôleur et auditée, porte P4. Aucun élément n'est certifié P5.
+
+## Tables additives de la tranche 03
+
+`organizations`, `demo_users`, `memberships`, `collections`, `notifications` et `verifications` sont ajoutées sans supprimer les lignes antérieures. Les colonnes `owner_organization_id` et les trois champs d'acteur d'audit sont ajoutés par `ALTER TABLE` ciblé. Les anciennes déclarations reconnues par leur `producer_id` sont rattachées à l'organisation fictive correspondante ; les anciens événements sans acteur restent lisibles avec des champs nuls.

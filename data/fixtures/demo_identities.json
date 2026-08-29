@@ -1,0 +1,71 @@
+{
+  "classification": "données fictives de démonstration — P0",
+  "organizations": [
+    {
+      "id": "ORG-PROD-ABOBO",
+      "name": "Organisation producteur Démo Abobo",
+      "kind": "producer",
+      "site_type": "producer",
+      "site_id": "PROD-001",
+      "is_demo": true
+    },
+    {
+      "id": "ORG-PROD-ADJAME",
+      "name": "Organisation producteur Démo Adjamé",
+      "kind": "producer",
+      "site_type": "producer",
+      "site_id": "PROD-002",
+      "is_demo": true
+    },
+    {
+      "id": "ORG-LOG-001",
+      "name": "Collecte Démo Lagune",
+      "kind": "logistics",
+      "is_demo": true
+    },
+    {
+      "id": "ORG-UNIT-ANYAMA",
+      "name": "Opérateur Démo Anyama",
+      "kind": "processing_unit",
+      "site_type": "processing_unit",
+      "site_id": "UNIT-001",
+      "is_demo": true
+    },
+    {
+      "id": "ORG-CONTROL-001",
+      "name": "Contrôle terrain Démo CI",
+      "kind": "field_control",
+      "is_demo": true
+    },
+    {
+      "id": "ORG-BIOLOOP",
+      "name": "Coordination BioLoop CI Démo",
+      "kind": "coordinator",
+      "is_demo": true
+    },
+    {
+      "id": "ORG-CLIENT-001",
+      "name": "Coopérative agricole cliente Démo",
+      "kind": "client_farmer",
+      "is_demo": true
+    }
+  ],
+  "users": [
+    { "id": "USER-PROD-001", "display_name": "Awa — productrice Démo Abobo", "is_demo": true },
+    { "id": "USER-PROD-002", "display_name": "Yao — producteur Démo Adjamé", "is_demo": true },
+    { "id": "USER-LOG-001", "display_name": "Mariam — logisticienne Démo", "is_demo": true },
+    { "id": "USER-UNIT-001", "display_name": "Koffi — opérateur unité Démo", "is_demo": true },
+    { "id": "USER-CONTROL-001", "display_name": "Nadia — contrôleuse terrain Démo", "is_demo": true },
+    { "id": "USER-COORD-001", "display_name": "Coordination BioLoop — démonstration non authentifiée", "is_demo": true },
+    { "id": "USER-CLIENT-001", "display_name": "Issa — agriculteur client Démo", "is_demo": true }
+  ],
+  "memberships": [
+    { "id": "MEM-PROD-001", "user_id": "USER-PROD-001", "organization_id": "ORG-PROD-ABOBO", "role": "producer", "status": "active" },
+    { "id": "MEM-PROD-002", "user_id": "USER-PROD-002", "organization_id": "ORG-PROD-ADJAME", "role": "producer", "status": "active" },
+    { "id": "MEM-LOG-001", "user_id": "USER-LOG-001", "organization_id": "ORG-LOG-001", "role": "logistician", "status": "active" },
+    { "id": "MEM-UNIT-001", "user_id": "USER-UNIT-001", "organization_id": "ORG-UNIT-ANYAMA", "role": "processing_unit_operator", "status": "active" },
+    { "id": "MEM-CONTROL-001", "user_id": "USER-CONTROL-001", "organization_id": "ORG-CONTROL-001", "role": "field_controller", "status": "active" },
+    { "id": "MEM-COORD-001", "user_id": "USER-COORD-001", "organization_id": "ORG-BIOLOOP", "role": "bioloop_coordinator", "status": "active" },
+    { "id": "MEM-CLIENT-001", "user_id": "USER-CLIENT-001", "organization_id": "ORG-CLIENT-001", "role": "client_farmer", "status": "active" }
+  ]
+}
