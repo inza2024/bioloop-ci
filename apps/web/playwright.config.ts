@@ -18,6 +18,7 @@ export default defineConfig({
       timeout: 120_000,
       env: {
         BIOLOOP_DB_PATH: "/tmp/bioloop-ci-e2e.db",
+        BIOLOOP_EVIDENCE_DIR: "/tmp/bioloop-ci-e2e-evidence",
         BIOLOOP_WEB_ORIGIN: "http://localhost:3000",
       },
     },

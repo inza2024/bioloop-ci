@@ -6,7 +6,14 @@ from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
-from .models import EstimateRun, EstimateScenario, EstimateSource, WasteDeclaration
+from .models import (
+    EstimateRun,
+    EstimateScenario,
+    EstimateSource,
+    ProofLevel,
+    Provenance,
+    WasteDeclaration,
+)
 
 
 class EstimationEngine:
@@ -31,14 +38,25 @@ class EstimationEngine:
             raise ValueError("Les multiplicateurs doivent être strictement croissants.")
 
     def calculate(
-        self, declaration: WasteDeclaration, processing_unit_id: str
+        self,
+        declaration: WasteDeclaration,
+        processing_unit_id: str,
+        *,
+        input_quantity_kg: Decimal | None = None,
+        input_provenance: Provenance = Provenance.DECLARED,
+        input_proof_level: ProofLevel = ProofLevel.P1,
+        source_measurement_id: str | None = None,
+        supersedes_estimate_run_id: str | None = None,
     ) -> EstimateRun:
         factor_set = self.factor_set
+        quantity_kg = input_quantity_kg or declaration.quantity_kg
         canonical_inputs = {
             "factor_set_id": factor_set["id"],
             "factor_set_version": factor_set["version"],
-            "mass_kg": str(declaration.quantity_kg),
+            "input_proof_level": input_proof_level.value,
+            "mass_kg": str(quantity_kg),
             "processing_unit_id": processing_unit_id,
+            "source_measurement_id": source_measurement_id,
             "waste_type_id": declaration.waste_type_id,
         }
         encoded = json.dumps(
@@ -49,12 +67,15 @@ class EstimationEngine:
         ).encode("utf-8")
         calculation_hash = hashlib.sha256(encoded).hexdigest()
         run_hash = hashlib.sha256(
-            f"{declaration.id}:{calculation_hash}".encode("utf-8")
+            (
+                f"{declaration.id}:{source_measurement_id or 'declared'}:"
+                f"{calculation_hash}"
+            ).encode("utf-8")
         ).hexdigest()
         scenarios = []
         for scenario in factor_set["scenarios"]:
             multiplier = Decimal(scenario["multiplier"])
-            value = (declaration.quantity_kg * multiplier).quantize(
+            value = (quantity_kg * multiplier).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP
             )
             scenarios.append(
@@ -72,7 +93,7 @@ class EstimationEngine:
             factor_set_version=factor_set["version"],
             classification="simulation illustrative",
             formula=factor_set["formula"],
-            input_quantity_kg=declaration.quantity_kg,
+            input_quantity_kg=quantity_kg,
             input_unit=factor_set["input_unit"],
             output_unit=factor_set["output_unit"],
             scenarios=scenarios,
@@ -81,5 +102,9 @@ class EstimationEngine:
             credibility_rule_reference=factor_set["credibility_rule_reference"],
             approved_for_scientific_claims=False,
             calculation_hash=calculation_hash,
+            input_provenance=input_provenance,
+            input_proof_level=input_proof_level,
+            source_measurement_id=source_measurement_id,
+            supersedes_estimate_run_id=supersedes_estimate_run_id,
             created_at=datetime.now(UTC),
         )

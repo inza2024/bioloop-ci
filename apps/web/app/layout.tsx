@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "BioLoop CI — Démonstrateur local",
   description:
-    "Déclaration, appariement, scénarios illustratifs et collecte simple pour le SIREXE Hackathon 2026.",
+    "Déclaration, preuve P2, mesure P3, lot et scénarios illustratifs traçables pour le SIREXE Hackathon 2026.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -14,4 +14,3 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     </html>
   );
 }
-

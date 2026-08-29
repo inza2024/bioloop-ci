@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { TraceabilityWorkflow } from "./traceability-workflow";
 import type {
   Catalog,
   Declaration,
@@ -151,12 +152,12 @@ export default function Home() {
         </nav>
         <div className="hero-grid" id="top">
           <div>
-            <span className="eyebrow">SIREXE Hackathon 2026 · tranche verticale 01</span>
-            <h1>Du gisement déclaré à une collecte <span>explicable.</span></h1>
+            <span className="eyebrow">SIREXE Hackathon 2026 · tranches verticales 01 + 02</span>
+            <h1>Du gisement déclaré au lot <span>traçable.</span></h1>
             <p className="hero-copy">
               Un parcours local pour déclarer un déchet organique, identifier une unité
-              compatible et comparer trois scénarios reproductibles — sans transformer
-              une simulation en vérité scientifique.
+              compatible, documenter une preuve, saisir une pesée et tracer la décision
+              de l’unité — sans transformer une simulation en vérité scientifique.
             </p>
             <div className="hero-actions">
               <a className="primary-button" href="#declaration">Créer une déclaration</a>
@@ -395,6 +396,10 @@ export default function Home() {
         </section>
       )}
 
+      {proposal && declaration && (
+        <TraceabilityWorkflow declaration={declaration} proposal={proposal} />
+      )}
+
       <footer>
         <div className="section-shell footer-shell">
           <div className="brand"><span className="brand-mark">BL</span><span>BioLoop <em>CI</em></span></div>
@@ -404,4 +409,3 @@ export default function Home() {
     </main>
   );
 }
-

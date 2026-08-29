@@ -16,6 +16,7 @@ def _project_path(value: str) -> Path:
 @dataclass(frozen=True)
 class Settings:
     db_path: Path
+    evidence_dir: Path
     fixtures_dir: Path
     factor_set_path: Path
     web_origin: str
@@ -25,6 +26,9 @@ class Settings:
         return cls(
             db_path=_project_path(
                 os.getenv("BIOLOOP_DB_PATH", "data/local/bioloop.db")
+            ),
+            evidence_dir=_project_path(
+                os.getenv("BIOLOOP_EVIDENCE_DIR", "data/local/evidence")
             ),
             fixtures_dir=PROJECT_ROOT / "data" / "fixtures",
             factor_set_path=(
@@ -37,4 +41,3 @@ class Settings:
                 "BIOLOOP_WEB_ORIGIN", "http://localhost:3000"
             ),
         )
-

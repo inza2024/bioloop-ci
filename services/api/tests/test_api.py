@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 def app_for(tmp_path: Path):
     settings = Settings(
         db_path=tmp_path / "test.db",
+        evidence_dir=tmp_path / "evidence",
         fixtures_dir=PROJECT_ROOT / "data" / "fixtures",
         factor_set_path=(
             PROJECT_ROOT
