@@ -1,0 +1,45 @@
+[
+  {
+    "id": "market_organic",
+    "name": "Déchets organiques de marché",
+    "description": "Fruits, légumes et matières organiques triées, sans garantie de composition.",
+    "provenance": "simulated",
+    "proof_level": "P0"
+  },
+  {
+    "id": "cattle_manure",
+    "name": "Effluents bovins",
+    "description": "Effluents déclarés d'élevage bovin ; qualité à contrôler avant acceptation.",
+    "provenance": "simulated",
+    "proof_level": "P0"
+  },
+  {
+    "id": "poultry_litter",
+    "name": "Litière avicole",
+    "description": "Mélange déclaré de déjections et litière ; composition non mesurée.",
+    "provenance": "simulated",
+    "proof_level": "P0"
+  },
+  {
+    "id": "cassava_residue",
+    "name": "Résidus de manioc",
+    "description": "Résidus organiques issus d'une transformation fictive de manioc.",
+    "provenance": "simulated",
+    "proof_level": "P0"
+  },
+  {
+    "id": "cocoa_residue",
+    "name": "Résidus de cacao",
+    "description": "Résidus de filière cacao fictifs ; caractéristiques non analysées.",
+    "provenance": "simulated",
+    "proof_level": "P0"
+  },
+  {
+    "id": "palm_residue",
+    "name": "Résidus de palmier",
+    "description": "Résidus organiques fictifs de transformation du palmier.",
+    "provenance": "simulated",
+    "proof_level": "P0"
+  }
+]
+

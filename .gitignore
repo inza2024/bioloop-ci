@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.python-tools/
+
+# Node / Next.js
+node_modules/
+.next/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Local runtime data and environment
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+!data/local/.gitkeep
+secrets/
+.secrets/
+*.pem
+*.key
+
+# Invalid repository backup retained for audit
+.git.invalid-backup-*
+
+# Research sources kept local pending licence and visibility review
+/AI-Agent-Security-Architecture-Attack-Surface-Defense-ebook.pdf
+/SIREXE_Hackathon_2026_10_idees_recherche.xlsx
+
+# Editors and operating systems
+.DS_Store
+.idea/
+*.swp

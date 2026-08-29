@@ -1,0 +1,55 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "BioLoop: API",
+      "type": "shell",
+      "command": ".venv/bin/python -m uvicorn app.main:app --app-dir services/api --reload --port 8000",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "bioloop",
+        "pattern": { "regexp": "^(.*)$", "message": 1 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Uvicorn running|Started reloader process",
+          "endsPattern": "Application startup complete"
+        }
+      },
+      "presentation": { "group": "bioloop", "panel": "dedicated" }
+    },
+    {
+      "label": "BioLoop: Web",
+      "type": "shell",
+      "command": "source \"$HOME/.nvm/nvm.sh\" && nvm use && NEXT_PUBLIC_API_URL=http://localhost:8000 npm --prefix apps/web run dev",
+      "options": {
+        "shell": {
+          "executable": "/bin/bash",
+          "args": ["-lc"]
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "bioloop",
+        "pattern": { "regexp": "^(.*)$", "message": 1 },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Starting|next dev",
+          "endsPattern": "Ready in|Local:"
+        }
+      },
+      "presentation": { "group": "bioloop", "panel": "dedicated" }
+    },
+    {
+      "label": "BioLoop: lancer la démo",
+      "dependsOn": ["BioLoop: API", "BioLoop: Web"],
+      "dependsOrder": "parallel"
+    },
+    {
+      "label": "BioLoop: tests backend",
+      "type": "shell",
+      "command": ".venv/bin/python -m pytest",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

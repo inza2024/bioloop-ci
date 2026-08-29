@@ -1,0 +1,40 @@
+{
+  "id": "illustrative-normalized-v1",
+  "version": "1.0.0",
+  "label": "Simulation illustrative — indice normalisé",
+  "status": "simulation_illustrative",
+  "proof_level": "P0",
+  "input_unit": "kg de matière fraîche déclarée",
+  "output_unit": "URI (unité de rendement illustrative)",
+  "formula": "masse déclarée (kg) × multiplicateur normalisé (URI/kg)",
+  "scenarios": [
+    {
+      "key": "low",
+      "label": "Bas",
+      "multiplier": "0.80"
+    },
+    {
+      "key": "central",
+      "label": "Central",
+      "multiplier": "1.00"
+    },
+    {
+      "key": "high",
+      "label": "Haut",
+      "multiplier": "1.20"
+    }
+  ],
+  "source": {
+    "title": "Convention logicielle interne BioLoop CI — base normalisée 1,00",
+    "reference": "data/factor_sets/illustrative-normalized-v1.json",
+    "note": "Multiplicateurs choisis uniquement pour tester le parcours et la reproductibilité. Ils ne proviennent d'aucune étude et ne représentent ni du biogaz, ni du méthane, ni un rendement agronomique."
+  },
+  "credibility_rule_reference": "outputs/BioLoop_CI_MVP_Hackathon_SIREXE_2026.md — section 5.1",
+  "assumptions": [
+    "La masse saisie est une déclaration P1 et n'est pas une pesée.",
+    "La composition, l'humidité et la contamination ne sont pas mesurées.",
+    "Les URI sont des unités de démonstration sans conversion vers Nm³, kWh, FCFA ou produit fertilisant.",
+    "Une estimation scientifique reste bloquée jusqu'à l'approbation d'un jeu de facteurs sourcé par un expert."
+  ],
+  "approved_for_scientific_claims": false
+}
