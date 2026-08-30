@@ -1,4 +1,4 @@
-# Dictionnaire de données — tranches verticales 01, 02 et 03
+# Dictionnaire de données — tranches verticales 01 à 04
 
 | Champ | Unité | Provenance | Preuve | Règle |
 |---|---|---|---|---|
@@ -38,11 +38,26 @@
 | projection `declared.value_kg` | kg attendus | base déclarée P1, résultat simulé | P0 | cadence P1 prolongée mécaniquement sur 7 ou 30 jours |
 | projection `measured_basis.value_kg` | kg attendus | base mesurée P3, résultat simulé | P0 | dernière mesure P3 multipliée par la même cadence déclarée |
 | `forecast.version` | identifiant | configuration | P0 | `deterministic-declaration-cadence-v1`, sans apprentissage ni LLM |
+| `waste_declaration.client_idempotency_key` | texte opaque client | navigateur | sans promotion | unique par organisation ; rejouer la même clé renvoie la déclaration existante |
+| `pilot_user.password_hash` | PHC Argon2id | secret dérivé | sécurité | jamais journalisé ni renvoyé par l'API |
+| `pilot_session.token_hash` | hexadécimal SHA-256 | secret dérivé | sécurité | seul le cookie contient le jeton opaque ; expiration et révocation serveur |
+| `pilot_membership.status` | `active` / `pending` | workflow d'accès | attribution | producteur/client actifs ; logistique/unité en attente ; rôles sensibles sur invitation |
+| `pilot_membership.role` | rôle contrôlé | attribution serveur | attribution | plusieurs appartenances possibles, une seule active par session |
+| `synthetic_data.seed` | entier | configuration | P0 | `20260830`, reproductibilité du profil enrichi |
+| `synthetic_data.version` | identifiant | configuration | P0 | `pilot-p0-fixed-seed-v1` |
+| `decision_metadata.uncertainty` | texte | contrat de service | P0 | limites explicites ; aucune distribution scientifique inventée |
+| `decision_metadata.human_validation_required` | booléen | contrat de service | P0 | vrai pour prévision, appariement, tournée et anomalie de référence |
 
 ## Invariant de preuve
 
 Une donnée ne monte jamais automatiquement de niveau : une pièce reste P2, une pesée saisie reste P3 et une décision d'une identité non authentifiée reste P1. Le calcul dérivé conserve le niveau le plus faible de ses entrées ; scénarios et projections restent P0 à cause des règles illustratives. Seule une ligne `verification` séparée, créée par le rôle contrôleur et auditée, porte P4. Aucun élément n'est certifié P5.
 
+Une session authentifiée attribue un acteur et une organisation, mais ne change jamais le niveau de preuve d'une donnée métier. Une déclaration synchronisée depuis IndexedDB reste P1. Le client ne met jamais en file une pièce P2, une mesure P3, un lot, une décision ou une vérification.
+
 ## Tables additives de la tranche 03
 
 `organizations`, `demo_users`, `memberships`, `collections`, `notifications` et `verifications` sont ajoutées sans supprimer les lignes antérieures. Les colonnes `owner_organization_id` et les trois champs d'acteur d'audit sont ajoutés par `ALTER TABLE` ciblé. Les anciennes déclarations reconnues par leur `producer_id` sont rattachées à l'organisation fictive correspondante ; les anciens événements sans acteur restent lisibles avec des champs nuls.
+
+## Tables additives de la tranche 04
+
+`pilot_users`, `pilot_organizations`, `pilot_memberships`, `pilot_sessions`, `pilot_login_attempts` et `pilot_role_invitations` sont créées par Alembic. `client_idempotency_key` est ajouté à `waste_declarations` avec un index unique par organisation. La migration ne supprime ni table, ni colonne, ni historique existant.

@@ -1,11 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { MultiActorPortals } from "./multi-actor-portals";
+import { PilotAccess } from "./pilot-access";
 import { TraceabilityWorkflow } from "./traceability-workflow";
+import { queueDeclaration } from "@/lib/offline-declarations";
 import type {
   Catalog,
+  AuthContext,
   Declaration,
   DemoActor,
   ProcessingUnit,
@@ -79,6 +82,8 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [demoActor, setDemoActor] = useState<DemoActor | null>(null);
+  const [authContext, setAuthContext] = useState<AuthContext | null>(null);
+  const [offlineMessage, setOfflineMessage] = useState("");
 
   useEffect(() => {
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
@@ -107,6 +112,11 @@ export default function Home() {
     [catalog, producerId],
   );
 
+  const handleAuthContextChange = useCallback((context: AuthContext | null) => {
+    setAuthContext(context);
+    setDemoActor(context?.actor ?? null);
+  }, []);
+
   const handleProducerChange = (id: string) => {
     setProducerId(id);
     const producer = catalog?.producers.find((item) => item.id === id);
@@ -118,21 +128,36 @@ export default function Home() {
     setBusy(true);
     setError("");
     setProposal(null);
+    setOfflineMessage("");
+    const payload = {
+      producer_id: producerId,
+      waste_type_id: wasteTypeId,
+      quantity_kg: quantity,
+      frequency,
+      availability_date: availabilityDate,
+      notes,
+    };
     try {
+      if (!navigator.onLine) {
+        const queued = await queueDeclaration(payload);
+        setOfflineMessage(`Déclaration ${queued.client_idempotency_key} mise en attente. Aucune preuve n’est stockée hors ligne.`);
+        return;
+      }
       const created = await api.createDeclaration({
-        producer_id: producerId,
-        waste_type_id: wasteTypeId,
-        quantity_kg: quantity,
-        frequency,
-        availability_date: availabilityDate,
-        notes,
+        ...payload,
+        client_idempotency_key: `web:${crypto.randomUUID()}`,
       }, demoActor?.user_id);
       const compatible = await api.matches(created.id, demoActor?.user_id);
       setDeclaration(created);
       setMatches(compatible);
       setSelectedUnitId(compatible[0]?.processing_unit_id ?? "");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Erreur inattendue");
+      if (!navigator.onLine || reason instanceof TypeError) {
+        const queued = await queueDeclaration(payload);
+        setOfflineMessage(`Réseau indisponible : ${queued.client_idempotency_key} sera synchronisée à la reprise.`);
+      } else {
+        setError(reason instanceof Error ? reason.message : "Erreur inattendue");
+      }
     } finally {
       setBusy(false);
     }
@@ -188,6 +213,8 @@ export default function Home() {
         </div>
       </header>
 
+      <PilotAccess onContextChange={handleAuthContextChange} />
+
       <section className="evidence-strip" aria-labelledby="evidence-title">
         <div className="section-shell">
           <div className="section-heading compact">
@@ -231,7 +258,7 @@ export default function Home() {
                 <article className="catalog-card producer-card" key={producer.id}>
                   <div className="card-heading">
                     <span className="producer-kind">{producer.kind}</span>
-                    <EvidenceBadge level={producer.proof_level} />
+                    <EvidenceBadge level={producer.proof_level} label="Producteur fictif" />
                   </div>
                   <h3>{producer.name}</h3>
                   <p>{producer.locality}</p>
@@ -263,7 +290,7 @@ export default function Home() {
               <div className="step-title"><span>1</span><div><small>DONNÉE P1</small><h3>Déclarer un gisement</h3></div></div>
               <label>
                 Producteur fictif
-                <select value={producerId} onChange={(event) => handleProducerChange(event.target.value)} disabled={demoActor?.role === "producer"} required>
+                  <select value={producerId} onChange={(event) => handleProducerChange(event.target.value)} disabled={demoActor?.is_demo === true && demoActor.role === "producer"} required>
                   {catalog?.producers.map((producer) => (
                     <option value={producer.id} key={producer.id}>{producer.name} — {producer.locality}</option>
                   ))}
@@ -345,6 +372,7 @@ export default function Home() {
             </div>
           </div>
           {error && <div className="error-banner" role="alert">{error}</div>}
+          {offlineMessage && <div className="offline-banner" role="status" data-testid="offline-queued">{offlineMessage}</div>}
         </div>
       </section>
 
@@ -411,7 +439,7 @@ export default function Home() {
         <TraceabilityWorkflow declaration={declaration} proposal={proposal} />
       )}
 
-      <MultiActorPortals onActorChange={setDemoActor} />
+      {!authContext && <MultiActorPortals onActorChange={setDemoActor} />}
 
       <footer>
         <div className="section-shell footer-shell">

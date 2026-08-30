@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#123d2d"/>
+  <circle cx="256" cy="236" r="150" fill="#1d5b43"/>
+  <path d="M130 284c75 20 143-22 196-125 48 74 48 139-2 184-53 49-139 43-194-14-27-29-37-64-33-101 9 21 20 40 33 56Z" fill="#b9e75b"/>
+  <text x="256" y="438" text-anchor="middle" font-family="system-ui,sans-serif" font-size="72" font-weight="800" fill="#fff">BioLoop CI</text>
+</svg>

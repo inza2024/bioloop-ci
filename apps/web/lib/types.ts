@@ -40,6 +40,11 @@ export interface Catalog {
   processing_units: ProcessingUnit[];
   waste_types: WasteType[];
   evidence_levels: EvidenceLabel[];
+  synthetic_profile: "small" | "enriched";
+  synthetic_data: {
+    metadata: Record<string, unknown>;
+    counts: Record<string, number>;
+  };
 }
 
 export interface Declaration {
@@ -55,6 +60,7 @@ export interface Declaration {
   notes: string;
   proof_level: ProofLevel;
   field_evidence: Record<string, EvidenceLabel>;
+  client_idempotency_key: string | null;
 }
 
 export interface UnitMatch {
@@ -260,8 +266,11 @@ export interface DemoActor {
   role: DemoRole;
   site_type: "producer" | "processing_unit" | null;
   site_id: string | null;
-  is_demo: true;
+  is_demo: boolean;
+  authenticated_for_pilot: boolean;
   authenticated_for_production: false;
+  membership_id: string | null;
+  membership_status: "active" | "pending";
 }
 
 export interface DemoActorCatalog {
@@ -330,6 +339,16 @@ export interface ForecastReport {
   }>;
   limitations: string[];
   historical_data_required_before_ml: string[];
+  decision_metadata: {
+    rule_or_model: string;
+    version: string;
+    input_variables: string[];
+    period: string;
+    proof_level: "P0";
+    uncertainty: string;
+    limitations: string[];
+    human_validation_required: boolean;
+  };
 }
 
 export interface VerificationRecord {
@@ -384,4 +403,31 @@ export interface DemoWorkspace {
   audit_events: AuditEvent[];
   products: Array<Record<string, unknown>>;
   product_empty_state: string | null;
+}
+
+export interface PilotMembership {
+  id: string;
+  organization_id: string;
+  organization_name: string;
+  organization_kind: string;
+  role: DemoRole;
+  status: "active" | "pending";
+}
+
+export interface AuthContext {
+  user: { id: string; display_name: string; email: string };
+  active_membership: PilotMembership;
+  memberships: PilotMembership[];
+  actor: DemoActor;
+  portal_path: string;
+  pilot_security_label: string;
+}
+
+export interface AuthPortal {
+  context: AuthContext;
+  notifications: NotificationRecord[];
+  declarations: Declaration[];
+  counters: Record<string, number>;
+  proof_summary: string;
+  next_action: string;
 }

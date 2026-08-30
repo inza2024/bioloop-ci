@@ -21,6 +21,8 @@ export default defineConfig({
         BIOLOOP_DB_PATH: "/tmp/bioloop-ci-e2e.db",
         BIOLOOP_EVIDENCE_DIR: "/tmp/bioloop-ci-e2e-evidence",
         BIOLOOP_WEB_ORIGIN: "http://localhost:3000",
+        BIOLOOP_DEMO_IDENTITIES_ENABLED: "true",
+        BIOLOOP_SYNTHETIC_PROFILE: "small",
       },
     },
     {
@@ -28,7 +30,7 @@ export default defineConfig({
       url: "http://127.0.0.1:3000",
       reuseExistingServer: true,
       timeout: 120_000,
-      env: { NEXT_PUBLIC_API_URL: "http://127.0.0.1:8000" },
+      env: { NEXT_PUBLIC_API_URL: "http://localhost:8000" },
     },
   ],
   projects: [

@@ -45,6 +45,13 @@ class CollaborationService:
     def _is_coordinator(actor: DemoActor) -> bool:
         return actor.role == DemoRole.COORDINATOR
 
+    @staticmethod
+    def _require_active(actor: DemoActor) -> None:
+        if actor.membership_status != "active":
+            raise AuthorizationError(
+                "Cette appartenance attend une validation ; aucune action métier n’est autorisée."
+            )
+
     def declaration_owner_id(self, declaration: WasteDeclaration) -> str | None:
         if declaration.owner_organization_id:
             return declaration.owner_organization_id
@@ -56,11 +63,16 @@ class CollaborationService:
     def require_create_declaration(
         self, actor: DemoActor, producer_id: str
     ) -> str | None:
+        self._require_active(actor)
         if self._is_coordinator(actor):
             organization = self.identities.organization_for_site(
                 "producer", producer_id
             )
             return organization.id if organization else None
+        if actor.authenticated_for_pilot and actor.role == DemoRole.PRODUCER:
+            # The catalog site remains a P0 location template. Ownership is the
+            # authenticated pilot organization, never the fixture organization.
+            return actor.organization_id
         organization = self.identities.organization(actor.organization_id)
         if (
             actor.role != DemoRole.PRODUCER
@@ -76,6 +88,7 @@ class CollaborationService:
     def require_declaration_read(
         self, actor: DemoActor, declaration: WasteDeclaration
     ) -> None:
+        self._require_active(actor)
         if self._is_coordinator(actor) or actor.role == DemoRole.FIELD_CONTROLLER:
             return
         owner_id = self.declaration_owner_id(declaration)
@@ -101,6 +114,7 @@ class CollaborationService:
     def require_producer_operation(
         self, actor: DemoActor, declaration: WasteDeclaration
     ) -> None:
+        self._require_active(actor)
         if self._is_coordinator(actor):
             return
         if (
@@ -114,6 +128,7 @@ class CollaborationService:
     def require_evidence_create(
         self, actor: DemoActor, declaration: WasteDeclaration
     ) -> None:
+        self._require_active(actor)
         if self._is_coordinator(actor):
             return
         if (
@@ -135,6 +150,7 @@ class CollaborationService:
     def require_measurement_create(
         self, actor: DemoActor, declaration: WasteDeclaration
     ) -> None:
+        self._require_active(actor)
         if self._is_coordinator(actor):
             return
         collection = self.repository.collection_for_declaration(declaration.id)
@@ -151,6 +167,7 @@ class CollaborationService:
     def require_lot_create(
         self, actor: DemoActor, declaration: WasteDeclaration, unit_id: str
     ) -> None:
+        self._require_active(actor)
         if self._is_coordinator(actor):
             return
         collection = self.repository.collection_for_declaration(
@@ -169,6 +186,7 @@ class CollaborationService:
     def require_collection_confirm(
         self, actor: DemoActor, collection: CollectionRecord
     ) -> None:
+        self._require_active(actor)
         if (
             actor.role != DemoRole.LOGISTICIAN
             or collection.logistician_organization_id != actor.organization_id
@@ -183,6 +201,7 @@ class CollaborationService:
         self.require_declaration_read(actor, declaration)
 
     def require_lot_decision(self, actor: DemoActor, lot) -> None:
+        self._require_active(actor)
         if self._is_coordinator(actor):
             return
         organization = self.identities.organization(actor.organization_id)
@@ -198,6 +217,7 @@ class CollaborationService:
 
     @staticmethod
     def require_controller(actor: DemoActor) -> None:
+        CollaborationService._require_active(actor)
         if actor.role != DemoRole.FIELD_CONTROLLER:
             raise AuthorizationError(
                 "Une vérification P4 exige le rôle contrôleur terrain."
@@ -205,6 +225,7 @@ class CollaborationService:
 
     @staticmethod
     def require_coordinator(actor: DemoActor) -> None:
+        CollaborationService._require_active(actor)
         if actor.role != DemoRole.COORDINATOR:
             raise AuthorizationError(
                 "Cette vue transversale est réservée au coordinateur BioLoop."

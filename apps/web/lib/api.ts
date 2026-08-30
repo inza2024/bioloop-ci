@@ -14,9 +14,30 @@ import type {
   UnitMatch,
   VerificationRecord,
   AuditEvent,
+  AuthContext,
+  AuthPortal,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+let csrfToken = "";
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+async function ensureCsrf(): Promise<string> {
+  if (csrfToken) return csrfToken;
+  const response = await fetch(`${API_URL}/api/v1/auth/csrf`, {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) throw new ApiError("Protection CSRF indisponible.", response.status);
+  const payload = await response.json() as { csrf_token: string };
+  csrfToken = payload.csrf_token;
+  return csrfToken;
+}
 
 async function request<T>(
   path: string,
@@ -24,6 +45,10 @@ async function request<T>(
   demoUserId?: string,
 ): Promise<T> {
   const headers = new Headers(init?.headers);
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    headers.set("X-CSRF-Token", await ensureCsrf());
+  }
   if (typeof init?.body === "string" && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -31,15 +56,40 @@ async function request<T>(
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers,
+    credentials: "include",
+    cache: "no-store",
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.detail ?? `Erreur API (${response.status})`);
+    const detail = Array.isArray(payload?.detail)
+      ? payload.detail.map((item: { msg?: string }) => item.msg).filter(Boolean).join(" · ")
+      : payload?.detail;
+    throw new ApiError(detail ?? `Erreur API (${response.status})`, response.status);
   }
   return response.json() as Promise<T>;
 }
 
 export const api = {
+  register: (payload: {
+    display_name: string;
+    email: string;
+    password: string;
+    organization_name: string;
+    organization_type: string;
+  }) => request<AuthContext>("/api/v1/auth/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
+  login: (payload: { email: string; password: string }) =>
+    request<AuthContext>("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  me: () => request<AuthContext>("/api/v1/auth/me"),
+  logout: () => request<{ status: string }>("/api/v1/auth/logout", { method: "POST" }),
+  activateMembership: (membershipId: string) =>
+    request<AuthContext>(`/api/v1/auth/memberships/${membershipId}/activate`, { method: "POST" }),
+  authPortal: (role: string) => request<AuthPortal>(`/api/v1/auth/portal/${role}`),
   catalog: () => request<Catalog>("/api/v1/catalog"),
   demoActors: () => request<DemoActorCatalog>("/api/v1/demo/actors"),
   demoWorkspace: (demoUserId: string, asOf?: string) => {
@@ -53,6 +103,7 @@ export const api = {
     frequency: string;
     availability_date: string;
     notes: string;
+    client_idempotency_key?: string;
   }, demoUserId?: string) =>
     request<Declaration>("/api/v1/declarations", {
       method: "POST",

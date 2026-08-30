@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import type {
   AuditEvent,
   DemoActor,
@@ -52,6 +52,7 @@ export function MultiActorPortals({ onActorChange }: MultiActorPortalsProps) {
     correlation_id: "",
   });
   const [filteredAudit, setFilteredAudit] = useState<AuditEvent[] | null>(null);
+  const [demoAvailable, setDemoAvailable] = useState<boolean | null>(null);
 
   const refresh = useCallback(async (userId: string) => {
     const data = await api.demoWorkspace(userId);
@@ -62,10 +63,18 @@ export function MultiActorPortals({ onActorChange }: MultiActorPortalsProps) {
   useEffect(() => {
     api.demoActors()
       .then((catalog) => {
+        setDemoAvailable(true);
         setActors(catalog.actors);
         return refresh(selectedUserId);
       })
-      .catch((reason: Error) => setError(reason.message));
+      .catch((reason: Error) => {
+        if (reason instanceof ApiError && reason.status === 404) {
+          setDemoAvailable(false);
+          onActorChange(null);
+          return;
+        }
+        setError(reason.message);
+      });
   }, [refresh, selectedUserId]);
 
   const changeActor = async (userId: string) => {
@@ -197,6 +206,8 @@ export function MultiActorPortals({ onActorChange }: MultiActorPortalsProps) {
       setBusy(false);
     }
   };
+
+  if (demoAvailable === false) return null;
 
   return (
     <section className="portal-section" id="portails" aria-labelledby="portal-title">

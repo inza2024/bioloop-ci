@@ -79,6 +79,12 @@ class WasteDeclarationCreate(BaseModel):
     frequency: Frequency
     availability_date: date
     notes: str = Field(default="", max_length=280)
+    client_idempotency_key: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
 
 
 class WasteDeclaration(WasteDeclarationCreate):
@@ -409,12 +415,15 @@ class DemoActor(BaseModel):
     role: DemoRole
     site_type: Literal["producer", "processing_unit"] | None = None
     site_id: str | None = None
-    is_demo: Literal[True] = True
+    is_demo: bool = True
+    authenticated_for_pilot: bool = False
     authenticated_for_production: Literal[False] = False
+    membership_id: str | None = None
+    membership_status: Literal["active", "pending"] = "active"
 
 
 class DemoActorCatalog(BaseModel):
-    mode_label: Literal["mode démonstration — aucune authentification de production"]
+    mode_label: str
     actors: list[DemoActor]
 
 
@@ -507,6 +516,17 @@ class ProjectionWindow(BaseModel):
     measured_coverage_declarations: int
 
 
+class DecisionServiceMetadata(BaseModel):
+    rule_or_model: str
+    version: str
+    input_variables: list[str]
+    period: str
+    proof_level: ProofLevel = ProofLevel.P0
+    uncertainty: str
+    limitations: list[str]
+    human_validation_required: bool = True
+
+
 class ForecastReport(BaseModel):
     processing_unit_id: str
     as_of: date
@@ -516,6 +536,7 @@ class ForecastReport(BaseModel):
     periods: list[ProjectionWindow]
     limitations: list[str]
     historical_data_required_before_ml: list[str]
+    decision_metadata: DecisionServiceMetadata
 
 
 class ProducerDeclarationView(BaseModel):
@@ -552,7 +573,7 @@ class PendingControlView(BaseModel):
 
 class DemoWorkspace(BaseModel):
     actor: DemoActor
-    mode_label: Literal["mode démonstration — aucune authentification de production"]
+    mode_label: str
     permissions: list[str]
     notifications: list[NotificationRecord]
     producer_declarations: list[ProducerDeclarationView] = Field(default_factory=list)

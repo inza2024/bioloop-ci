@@ -1,6 +1,6 @@
-# BioLoop CI — tranches verticales 01, 02 et 03 du MVP
+# BioLoop CI — tranches verticales 01 à 04 du MVP
 
-BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il relie désormais la déclaration et l'estimation illustrative, la traçabilité P2/P3 du lot, puis une collaboration attribuée entre producteur, logistique, unité, contrôle terrain, coordination et client/agriculteur.
+BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il relie la déclaration et l'estimation illustrative, la traçabilité P2/P3 du lot, une collaboration multi-acteurs, puis une fondation pilote mobile avec comptes locaux, sessions serveur, PWA et données synthétiques enrichies optionnelles.
 
 > **Avertissement scientifique** — Aucun résultat affiché n'est un rendement biogaz validé. Le moteur produit des **URI (unités de rendement illustratives)** avec un jeu de multiplicateurs P0 intitulé « simulation illustrative ». Il n'effectue aucune conversion vers `Nm³`, `kWh`, FCFA, digestat, engrais ou crédit environnemental.
 
@@ -27,7 +27,23 @@ BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il relie d
 - afficher des projections déterministes P0 sur 7 et 30 jours, avec bases P1 et P3 séparées ;
 - présenter au client un état vide honnête tant qu'aucun produit qualifié n'existe.
 
-La démo n'inclut volontairement ni paiement, ni crédit carbone, ni blockchain, ni agent IA autonome, ni authentification de production. Aucun LLM n'intervient dans les calculs.
+La tranche 04 ajoute une **authentification pilote locale**, pas une sécurité de production certifiée. La démo n'inclut volontairement ni paiement, ni crédit carbone, ni blockchain, ni agent IA autonome. Aucun LLM ni modèle externe n'intervient dans les calculs, prévisions, appariements ou tournées.
+
+## Fondation pilote ajoutée en tranche 04
+
+- inscription et connexion locales avec mot de passe Argon2id ;
+- jeton de session opaque, dont seule l'empreinte SHA-256 est stockée côté serveur ;
+- cookie `HttpOnly`, `SameSite=Lax`, `Secure` lorsque `BIOLOOP_COOKIE_SECURE=true` ;
+- protection CSRF par double soumission, contrôle d'origine, limitation des échecs de connexion et erreurs génériques ;
+- modèle utilisateur → appartenances → organisations, avec organisation/rôle actifs ;
+- portails attribués par le backend, redirection par rôle et isolation des déclarations par organisation ;
+- manifeste PWA, icônes, navigation mobile, statut réseau et proposition d'installation ;
+- file IndexedDB réservée aux **nouvelles déclarations**, avec identifiant d'idempotence et synchronisation au retour du réseau ;
+- SQLAlchemy 2 et Alembic pour la nouvelle fondation, sans réécriture brutale du repository SQLite historique ;
+- profil enrichi P0 reproductible : 40 producteurs, 4 unités, véhicules/capacités fictifs, disponibilités, historiques et clients ;
+- contrats `ForecastService`, `MatchingService`, `RoutingService` et `AnomalyDetectionService`, avec versions, variables, preuve, incertitude, limites et validation humaine.
+
+Le service worker ne cache jamais `/api/*` ni `/portal/*`. Aucune session, preuve, mesure, pièce binaire ou donnée privée n'est mise en cache hors ligne. Une synchronisation de déclaration ne crée pas de preuve et ne promeut aucun niveau P1 vers P2/P3/P4.
 
 ## Prérequis
 
@@ -60,6 +76,8 @@ npm --prefix apps/web ci
 npm --prefix apps/web exec -- playwright install chromium
 ```
 
+Sur Ubuntu, `python3.12-venv` doit être installé pour obtenir `pip` dans `.venv`. Cette dépendance système n'est jamais installée automatiquement par le projet.
+
 Les valeurs par défaut fonctionnent sans fichier d'environnement. Pour les personnaliser dans le terminal courant :
 
 ```bash
@@ -89,6 +107,27 @@ NEXT_PUBLIC_API_URL=http://localhost:8000 npm --prefix apps/web run dev
 Puis ouvrir [http://localhost:3000](http://localhost:3000). La documentation OpenAPI est disponible sur [http://localhost:8000/docs](http://localhost:8000/docs).
 
 Les tâches VS Code « BioLoop: API » et « BioLoop: Web » proposent les mêmes commandes. `make dev-api` et `make dev-web` sont aussi disponibles.
+
+### Comptes et validation pilote
+
+Depuis la section « Compte local et portail attribué » :
+
+- un producteur ou client peut créer une organisation et une appartenance `active` ;
+- une organisation logistique ou unité de transformation obtient une appartenance `pending` et ne peut exécuter aucune action métier avant validation ;
+- les rôles contrôleur terrain et coordinateur BioLoop ne sont jamais disponibles en auto-inscription : une invitation/approbation administrateur sera nécessaire ;
+- une même personne peut posséder plusieurs appartenances et changer d'organisation active, sans élargir sa portée serveur.
+
+Le sélecteur historique d'identités fictives reste disponible seulement lorsque `BIOLOOP_DEMO_IDENTITIES_ENABLED=true`. Il est clairement distinct d'une session pilote et peut être désactivé pour tester le parcours authentifié.
+
+### Profils de données
+
+`BIOLOOP_SYNTHETIC_PROFILE=small` conserve les 8 producteurs et 2 unités historiques afin de préserver les tests et la démo courte. `BIOLOOP_SYNTHETIC_PROFILE=enriched` expose 40 producteurs et 4 unités en conservant les identifiants existants. Les extensions utilisent la graine fixe `20260830`, la version `pilot-p0-fixed-seed-v1` et restent intégralement P0.
+
+```bash
+BIOLOOP_SYNTHETIC_PROFILE=enriched make dev-api
+```
+
+Ces historiques synthétiques ne sont ni des observations terrain, ni des données d'entraînement validées.
 
 ## Parcours de démonstration
 
@@ -131,7 +170,15 @@ npm --prefix apps/web run test:e2e
 
 ```text
 apps/web/                     Next.js + TypeScript, aucune règle métier
+  app/manifest.ts             manifeste PWA versionné
+  public/sw.js                cache du shell public uniquement
+  lib/offline-declarations.ts file IndexedDB limitée aux déclarations
 services/api/app/             monolithe FastAPI modulaire
+  auth.py                     Argon2, sessions opaques, appartenances et limitation
+  database.py                 SQLAlchemy 2, migration Alembic et abstraction géographique
+  repository_interfaces.py   ports pour migration progressive des repositories
+  synthetic_data.py           profil P0 enrichi à graine fixe
+  decision_services.py        contrats et références déterministes
   catalog.py                  lecture des fixtures P0
   matching.py                 compatibilité et capacité déterministes
   estimation.py               scénarios versionnés et empreinte SHA-256
@@ -146,9 +193,18 @@ data/factor_sets/             jeu illustratif versionné
 services/api/tests/           tests golden, règles et API
 apps/web/tests/               test Playwright du parcours
 docs/                         décisions et dictionnaire des données
+services/api/alembic/         migrations additives versionnées
 ```
 
-Le backend est un monolithe modulaire. SQLite accélère la démo locale ; PostgreSQL/PostGIS reste la cible d'un pilote. Le frontend consomme exclusivement les contrats HTTP de FastAPI.
+Le backend reste un monolithe modulaire. SQLite accélère la démo locale. `DATABASE_URL` prépare SQLAlchemy/Alembic à PostgreSQL ; le repository métier historique reste volontairement sur SQLite pendant cette migration progressive. PostGIS n'est pas installé : `GeoPoint` marque la frontière d'adaptation future, sans prétendre fournir aujourd'hui des requêtes géospatiales PostgreSQL.
+
+Appliquer explicitement les migrations :
+
+```bash
+PYTHONPATH=services/api .venv/bin/alembic -c services/api/alembic.ini upgrade head
+```
+
+La migration `0004_pilot_auth` est additive et son `downgrade` ne supprime aucune donnée locale.
 
 ### API principale
 
@@ -172,8 +228,18 @@ Le backend est un monolithe modulaire. SQLite accélère la démo locale ; Postg
 | `POST` | `/api/v1/demo/collections/{id}/confirm` | collecte liée à une preuve P2 et une mesure P3 |
 | `POST` | `/api/v1/demo/verifications` | événement P4 réservé au contrôleur terrain |
 | `GET` | `/api/v1/demo/audit` | audit filtrable réservé au coordinateur |
+| `GET` | `/api/v1/auth/csrf` | amorcer la protection CSRF |
+| `POST` | `/api/v1/auth/register` | créer un compte et une appartenance autorisée |
+| `POST` | `/api/v1/auth/login` | ouvrir une session pilote locale |
+| `GET` | `/api/v1/auth/me` | lire l'utilisateur et l'organisation actifs |
+| `POST` | `/api/v1/auth/logout` | révoquer la session serveur |
+| `POST` | `/api/v1/auth/memberships/{id}/activate` | changer d'appartenance accessible |
+| `GET` | `/api/v1/auth/portal/{role}` | vue attribuée et contrôlée côté backend |
+| `GET` | `/api/v1/pilot/synthetic-data` | données P0 enrichies avec version et graine |
 
 Les entrées ont des types, longueurs et bornes explicites. Une unité incompatible est rejetée côté serveur. Les exécutions sont déterministes pour une même masse, un même déchet, une même unité, une même provenance et une même version de facteurs.
+
+Chaque réponse API porte `X-Correlation-ID` et des en-têtes de durcissement. Les audits d'authentification ne contiennent ni mot de passe, ni email brut, ni cookie, ni jeton de session. Cette fondation locale n'inclut toutefois ni MFA, ni récupération de compte, ni fournisseur d'identité, ni rotation de clés, ni journal inviolable, ni administration complète des invitations.
 
 ### Sécurité des preuves locales
 
@@ -231,9 +297,14 @@ Les projections 7/30 jours sont des agrégations mécaniques P0. Elles prolongen
 - Les projections ne modélisent ni saisonnalité, contamination, disponibilité, probabilité d'acceptation, temps routier ni production réelle.
 - Avant tout apprentissage, il faudra un historique de masses déclarées/mesurées, fréquences, saisons, déchets, contaminations, acceptations/refus, temps de collecte, capacités et productions réellement mesurées.
 - L'audit local ne remplace pas session signée, RBAC administrable, journal inviolable, sauvegardes et supervision d'un environnement de production.
+- L'authentification pilote ne constitue pas une homologation ou certification de sécurité de production.
+- Le cache hors ligne ne couvre ni portails privés, ni preuves, ni mesures, ni lots ; seule une nouvelle déclaration peut attendre la reprise réseau.
+- Le profil enrichi est P0, créé par une règle déterministe à graine fixe ; il ne prouve aucun volume ou comportement réel.
+- Le seuil d'anomalie de référence est une règle logicielle illustrative et ne conclut ni à une fraude, ni à une contamination.
+- PostgreSQL/PostGIS reste une cible : cette tranche prépare la migration mais ne remplace pas encore le repository métier SQLite.
 
 La règle de crédibilité et le périmètre fonctionnel proviennent de `outputs/BioLoop_CI_MVP_Hackathon_SIREXE_2026.md`. Les fichiers de recherche restent inchangés.
 
 ## Prochaine tranche recommandée
 
-Ajouter une tranche **transformation mesurée → produit qualifié → disponibilité client**. Elle devra enregistrer entrées, pertes et sorties réellement mesurées, critères qualité, statut de libération, stock disponible et provenance, sans déduire un rendement scientifique des URI illustratives. L'authentification de production, la rétention des pièces et le stockage objet sécurisé restent des prérequis distincts avant pilote.
+Ajouter une tranche **administration des invitations et validation d'organisations → transformation mesurée → produit qualifié → disponibilité client**. Elle devra d'abord fournir l'approbation explicite des unités/logisticiens et des rôles sensibles, puis enregistrer entrées, pertes et sorties mesurées, critères qualité, statut de libération, stock disponible et provenance, sans déduire un rendement scientifique des URI illustratives. MFA, récupération de compte, stockage objet sécurisé, rétention et PostgreSQL/PostGIS complet restent des prérequis distincts avant production.

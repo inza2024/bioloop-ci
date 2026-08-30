@@ -1,16 +1,34 @@
 from __future__ import annotations
 
+import re
+from contextvars import ContextVar
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from .catalog import Catalog
+from .auth import (
+    CSRF_COOKIE,
+    CSRF_HEADER,
+    SESSION_COOKIE,
+    AuthConflictError,
+    AuthContext,
+    AuthError,
+    AuthPermissionError,
+    AuthRateLimitError,
+    AuthService,
+    LoginCreate,
+    RegistrationCreate,
+    csrf_matches,
+    new_csrf_token,
+)
 from .collaboration import AuthorizationError, CollaborationService, MODE_LABEL
 from .config import Settings
+from .database import Database, run_migrations
 from .estimation import EstimationEngine
 from .evidence import (
     MAX_EVIDENCE_BYTES,
@@ -57,10 +75,15 @@ from .routing import propose_route
 DeclarationPath = Annotated[str, Path(pattern=r"^DECL-[A-F0-9]{12}$")]
 LotPath = Annotated[str, Path(pattern=r"^LOT-[A-F0-9]{12}$")]
 CollectionPath = Annotated[str, Path(pattern=r"^COLL-[A-F0-9]{12}$")]
+MembershipPath = Annotated[str, Path(pattern=r"^PMEM-[A-F0-9]{16}$")]
+CORRELATION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,99}$")
+REQUEST_CORRELATION_ID: ContextVar[str | None] = ContextVar(
+    "bioloop_request_correlation_id", default=None
+)
 
 
 def correlation_id() -> str:
-    return f"CORR-{uuid4().hex[:12].upper()}"
+    return REQUEST_CORRELATION_ID.get() or f"CORR-{uuid4().hex[:12].upper()}"
 
 
 async def read_limited_body(request: Request) -> bytes:
@@ -74,8 +97,11 @@ async def read_limited_body(request: Request) -> bytes:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
-    catalog = Catalog(settings.fixtures_dir)
+    catalog = Catalog(settings.fixtures_dir, profile=settings.synthetic_profile)
     repository = Repository(settings.db_path)
+    run_migrations(settings.resolved_database_url)
+    database = Database(settings.resolved_database_url)
+    auth = AuthService(database, session_ttl_seconds=settings.session_ttl_seconds)
     evidence_storage = EvidenceStorage(settings.evidence_dir)
     estimator = EstimationEngine(settings.factor_set_path)
     identities = IdentityDirectory(settings.fixtures_dir / "demo_identities.json")
@@ -98,7 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="BioLoop CI — API de démonstration",
-        version="0.3.0",
+        version="0.4.0",
         description=(
             "Démonstrateur local multi-acteurs. L'identité choisie n'est pas une "
             "authentification de production. Les facteurs, itinéraires et projections "
@@ -108,10 +134,62 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.web_origin],
-        allow_credentials=False,
+        allow_credentials=True,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "X-Correlation-ID", "X-Demo-User-ID"],
+        allow_headers=[
+            "Content-Type",
+            "X-Correlation-ID",
+            "X-CSRF-Token",
+            "X-Demo-User-ID",
+        ],
     )
+
+    @app.middleware("http")
+    async def security_and_correlation_middleware(request: Request, call_next):
+        supplied = request.headers.get("X-Correlation-ID", "")
+        request.state.correlation_id = (
+            supplied
+            if CORRELATION_PATTERN.fullmatch(supplied)
+            else f"CORR-{uuid4().hex[:12].upper()}"
+        )
+
+        def harden(response: Response) -> Response:
+            response.headers["X-Correlation-ID"] = request.state.correlation_id
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "same-origin"
+            response.headers["Permissions-Policy"] = (
+                "camera=(), microphone=(), geolocation=()"
+            )
+            if request.url.path.startswith("/api/"):
+                response.headers["Cache-Control"] = "no-store"
+            return response
+
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_EVIDENCE_BYTES + 16_384:
+                    return harden(
+                        Response(status_code=413, content="Requête trop volumineuse.")
+                    )
+            except ValueError:
+                return harden(
+                    Response(status_code=400, content="Longueur de requête invalide.")
+                )
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and request.cookies.get(SESSION_COOKIE)
+            and not csrf_matches(
+                request.cookies.get(CSRF_COOKIE), request.headers.get(CSRF_HEADER)
+            )
+        ):
+            return harden(Response(status_code=403, content="Protection CSRF requise."))
+        context_token = REQUEST_CORRELATION_ID.set(request.state.correlation_id)
+        try:
+            response = await call_next(request)
+        finally:
+            REQUEST_CORRELATION_ID.reset(context_token)
+        return harden(response)
 
     def resolve_actor(user_id: str) -> DemoActor:
         try:
@@ -120,15 +198,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     async def current_actor(
+        request: Request,
         x_demo_user_id: Annotated[str | None, Header()] = None,
     ) -> DemoActor:
-        # Compatibilité des deux premières tranches : sans en-tête, le parcours
-        # historique agit comme coordinateur de démonstration.
-        return resolve_actor(x_demo_user_id or DEFAULT_DEMO_USER_ID)
+        context = auth.resolve(request.cookies.get(SESSION_COOKIE))
+        if context is not None:
+            return context.actor
+        if x_demo_user_id and settings.demo_identities_enabled:
+            return resolve_actor(x_demo_user_id)
+        # Compatibility mode is local and explicitly disableable.
+        if settings.demo_identities_enabled:
+            return resolve_actor(DEFAULT_DEMO_USER_ID)
+        raise HTTPException(status_code=401, detail="Authentification requise.")
 
     async def explicit_demo_actor(
+        request: Request,
         x_demo_user_id: Annotated[str | None, Header()] = None,
     ) -> DemoActor:
+        context = auth.resolve(request.cookies.get(SESSION_COOKIE))
+        if context is not None:
+            return context.actor
+        if not settings.demo_identities_enabled:
+            raise HTTPException(status_code=404, detail="Mode démonstration désactivé.")
         if x_demo_user_id is None:
             raise HTTPException(
                 status_code=401,
@@ -138,6 +229,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ),
             )
         return resolve_actor(x_demo_user_id)
+
+    async def current_auth_context(request: Request) -> AuthContext:
+        context = auth.resolve(request.cookies.get(SESSION_COOKIE))
+        if context is None:
+            raise HTTPException(status_code=401, detail="Session invalide ou expirée.")
+        return context
+
+    def require_csrf(request: Request) -> None:
+        if not csrf_matches(
+            request.cookies.get(CSRF_COOKIE), request.headers.get(CSRF_HEADER)
+        ):
+            raise HTTPException(status_code=403, detail="Protection CSRF requise.")
+        origin = request.headers.get("origin")
+        if origin and origin != settings.web_origin:
+            raise HTTPException(status_code=403, detail="Origine non autorisée.")
+
+    def set_session_cookie(response: Response, token: str) -> None:
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            max_age=settings.session_ttl_seconds,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="lax",
+            path="/",
+        )
+
+    def auth_audit(
+        request: Request,
+        *,
+        event_type: str,
+        object_id: str,
+        actor: DemoActor | None = None,
+        payload: dict | None = None,
+    ) -> None:
+        repository.append_audit_event(
+            correlation_id=request.state.correlation_id,
+            event_type=event_type,
+            object_type="pilot_identity",
+            object_id=object_id,
+            payload=payload or {},
+            actor=actor,
+        )
 
     def enforce(action) -> None:
         try:
@@ -149,8 +283,150 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> dict:
         return {"status": "ok", "mode": "local-demo", "version": app.version}
 
+    @app.get("/api/v1/auth/csrf")
+    async def issue_csrf(response: Response) -> dict[str, str]:
+        token = new_csrf_token()
+        response.set_cookie(
+            CSRF_COOKIE,
+            token,
+            max_age=86_400,
+            httponly=False,
+            secure=settings.cookie_secure,
+            samesite="lax",
+            path="/",
+        )
+        return {"csrf_token": token}
+
+    @app.post("/api/v1/auth/register", response_model=AuthContext, status_code=201)
+    async def register(
+        data: RegistrationCreate, request: Request, response: Response
+    ) -> AuthContext:
+        require_csrf(request)
+        try:
+            grant = auth.register(data)
+        except AuthPermissionError as exc:
+            auth_audit(request, event_type="auth.registration_denied", object_id="SELF-SERVICE")
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except AuthConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        set_session_cookie(response, grant.token)
+        auth_audit(
+            request,
+            event_type="auth.registered",
+            object_id=grant.context.user.id,
+            actor=grant.context.actor,
+            payload={
+                "role": grant.context.active_membership.role.value,
+                "membership_status": grant.context.active_membership.status,
+            },
+        )
+        return grant.context
+
+    @app.post("/api/v1/auth/login", response_model=AuthContext)
+    async def login(
+        data: LoginCreate, request: Request, response: Response
+    ) -> AuthContext:
+        require_csrf(request)
+        try:
+            grant = auth.login(
+                data, client_ip=request.client.host if request.client else "unknown"
+            )
+        except AuthRateLimitError as exc:
+            auth_audit(request, event_type="auth.rate_limited", object_id="LOGIN")
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except AuthError as exc:
+            auth_audit(request, event_type="auth.login_failed", object_id="LOGIN")
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        set_session_cookie(response, grant.token)
+        auth_audit(
+            request,
+            event_type="auth.login_succeeded",
+            object_id=grant.context.user.id,
+            actor=grant.context.actor,
+        )
+        return grant.context
+
+    @app.get("/api/v1/auth/me", response_model=AuthContext)
+    async def auth_me(
+        context: AuthContext = Depends(current_auth_context),
+    ) -> AuthContext:
+        return context
+
+    @app.post("/api/v1/auth/logout")
+    async def logout(
+        request: Request,
+        response: Response,
+        context: AuthContext = Depends(current_auth_context),
+    ) -> dict[str, str]:
+        auth.logout(request.cookies.get(SESSION_COOKIE))
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        auth_audit(
+            request,
+            event_type="auth.logged_out",
+            object_id=context.user.id,
+            actor=context.actor,
+        )
+        return {"status": "logged_out"}
+
+    @app.post(
+        "/api/v1/auth/memberships/{membership_id}/activate",
+        response_model=AuthContext,
+    )
+    async def activate_membership(
+        membership_id: MembershipPath,
+        request: Request,
+        context: AuthContext = Depends(current_auth_context),
+    ) -> AuthContext:
+        try:
+            updated = auth.switch_membership(
+                request.cookies.get(SESSION_COOKIE, ""), membership_id
+            )
+        except AuthPermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        auth_audit(
+            request,
+            event_type="auth.membership_activated",
+            object_id=membership_id,
+            actor=updated.actor,
+            payload={"previous_membership_id": context.active_membership.id},
+        )
+        return updated
+
+    @app.get("/api/v1/auth/portal/{role}")
+    async def authenticated_portal(
+        role: DemoRole,
+        context: AuthContext = Depends(current_auth_context),
+    ) -> dict:
+        membership = context.active_membership
+        if role != membership.role:
+            raise HTTPException(status_code=403, detail="Portail non autorisé pour ce rôle.")
+        declarations = (
+            repository.list_declarations_for_organization(membership.organization_id)
+            if role == DemoRole.PRODUCER and membership.status == "active"
+            else []
+        )
+        return {
+            "context": context,
+            "notifications": repository.list_notifications(context.actor),
+            "declarations": declarations,
+            "counters": {
+                "declarations": len(declarations),
+                "notifications": len(repository.list_notifications(context.actor)),
+            },
+            "proof_summary": (
+                "Les nouvelles déclarations sont P1 ; les catalogues et projections restent P0."
+            ),
+            "next_action": (
+                "Validation de l’organisation requise avant toute action métier."
+                if membership.status == "pending"
+                else "Utilisez les actions autorisées pour votre organisation active."
+            ),
+        }
+
     @app.get("/api/v1/demo/actors", response_model=DemoActorCatalog)
     async def get_demo_actors() -> DemoActorCatalog:
+        if not settings.demo_identities_enabled:
+            raise HTTPException(status_code=404, detail="Mode démonstration désactivé.")
         return DemoActorCatalog(mode_label=MODE_LABEL, actors=identities.actors)
 
     @app.get("/api/v1/demo/workspace", response_model=DemoWorkspace)
@@ -179,6 +455,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "producers": catalog.producers,
             "processing_units": catalog.processing_units,
             "waste_types": catalog.waste_types,
+            "synthetic_profile": catalog.profile,
+            "synthetic_data": catalog.synthetic_dataset.summary(),
             "evidence_levels": [
                 EvidenceLabel(provenance=Provenance.SIMULATED, proof_level=ProofLevel.P0, label="Simulé"),
                 EvidenceLabel(provenance=Provenance.DECLARED, proof_level=ProofLevel.P1, label="Déclaré"),
@@ -187,6 +465,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 EvidenceLabel(provenance=Provenance.VERIFIED, proof_level=ProofLevel.P4, label="Vérifié"),
                 EvidenceLabel(provenance=Provenance.CERTIFIED, proof_level=ProofLevel.P5, label="Certifié"),
             ],
+        }
+
+    @app.get("/api/v1/pilot/synthetic-data")
+    async def get_synthetic_data(
+        context: AuthContext = Depends(current_auth_context),
+    ) -> dict:
+        dataset = catalog.synthetic_dataset
+        return {
+            **dataset.summary(),
+            "availability": dataset.availability,
+            "logistics": dataset.logistics,
+            "operational_history": dataset.operational_history,
+            "clients": dataset.clients,
+            "accessed_by_organization_id": context.active_membership.organization_id,
         }
 
     @app.get("/api/v1/declarations", response_model=list[WasteDeclaration])
@@ -222,6 +514,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except AuthorizationError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        if data.client_idempotency_key:
+            existing = repository.declaration_by_idempotency_key(
+                owner_organization_id, data.client_idempotency_key
+            )
+            if existing is not None:
+                return existing
         declaration = repository.create_declaration(
             data, producer, owner_organization_id=owner_organization_id
         )

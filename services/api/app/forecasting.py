@@ -7,6 +7,7 @@ from typing import Protocol
 
 from .models import (
     ForecastReport,
+    DecisionServiceMetadata,
     MeasurementRecord,
     ProjectionMetric,
     ProjectionWindow,
@@ -106,4 +107,23 @@ class DeterministicDeclarationForecastService:
                 "capacité disponible",
                 "production réellement mesurée",
             ],
+            decision_metadata=DecisionServiceMetadata(
+                rule_or_model="cadence déclarée × occurrences calendaires",
+                version=self.version,
+                input_variables=[
+                    "quantity_kg P1",
+                    "latest measurement quantity_kg P3 when available",
+                    "frequency",
+                    "availability_date",
+                ],
+                period="7 et 30 jours à partir de as_of",
+                uncertainty=(
+                    "Non quantifiée : aucune distribution statistique ni validation terrain."
+                ),
+                limitations=[
+                    "Simulation mécanique sans saisonnalité ni probabilité.",
+                    "Les historiques synthétiques P0 ne servent pas à entraîner un modèle.",
+                ],
+                human_validation_required=True,
+            ),
         )

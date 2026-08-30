@@ -398,6 +398,12 @@ class Repository:
         producer,
         owner_organization_id: str | None = None,
     ) -> WasteDeclaration:
+        if data.client_idempotency_key:
+            existing = self.declaration_by_idempotency_key(
+                owner_organization_id, data.client_idempotency_key
+            )
+            if existing is not None:
+                return existing
         declaration_id = f"DECL-{uuid4().hex[:12].upper()}"
         created_at = datetime.now(UTC)
         with self._connect() as connection:
@@ -407,7 +413,8 @@ class Repository:
                     id, producer_id, producer_name, producer_locality,
                     waste_type_id, quantity_kg, frequency, availability_date,
                     notes, latitude, longitude, created_at, owner_organization_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    , client_idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     declaration_id,
@@ -423,11 +430,25 @@ class Repository:
                     producer.longitude,
                     created_at.isoformat(),
                     owner_organization_id,
+                    data.client_idempotency_key,
                 ),
             )
         declaration = self.get_declaration(declaration_id)
         assert declaration is not None
         return declaration
+
+    def declaration_by_idempotency_key(
+        self, owner_organization_id: str | None, key: str
+    ) -> WasteDeclaration | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM waste_declarations
+                WHERE owner_organization_id IS ? AND client_idempotency_key = ?
+                """,
+                (owner_organization_id, key),
+            ).fetchone()
+        return self._to_declaration(row) if row else None
 
     def get_declaration(self, declaration_id: str) -> WasteDeclaration | None:
         with self._connect() as connection:
@@ -469,6 +490,11 @@ class Repository:
             frequency=row["frequency"],
             availability_date=row["availability_date"],
             notes=row["notes"],
+            client_idempotency_key=(
+                row["client_idempotency_key"]
+                if "client_idempotency_key" in row.keys()
+                else None
+            ),
             latitude=row["latitude"],
             longitude=row["longitude"],
             provenance=Provenance.DECLARED,
