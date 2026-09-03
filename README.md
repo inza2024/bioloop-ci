@@ -131,7 +131,7 @@ Depuis la section « Compte local et portail attribué » :
 
 - un producteur ou client peut créer une organisation et une appartenance `active` ;
 - une organisation logistique ou unité de transformation obtient une appartenance `pending` et ne peut exécuter aucune action métier avant validation ;
-- les rôles contrôleur terrain et coordinateur BioLoop ne sont jamais disponibles en auto-inscription : une invitation/approbation administrateur sera nécessaire ;
+- les rôles contrôleur terrain et coordinateur BioLoop ne sont jamais disponibles en auto-inscription : leur accès nécessite une invitation ou une approbation explicite du coordinateur, disponible dans la tranche 05 ;
 - une même personne peut posséder plusieurs appartenances et changer d'organisation active, sans élargir sa portée serveur.
 
 Le sélecteur historique d'identités fictives reste disponible seulement lorsque `BIOLOOP_DEMO_IDENTITIES_ENABLED=true`. Il est clairement distinct d'une session pilote et peut être désactivé pour tester le parcours authentifié.
@@ -268,7 +268,7 @@ La migration `0005_transformation_inventory` est additive. Son `downgrade` est v
 
 Les entrées ont des types, longueurs et bornes explicites. Une unité incompatible est rejetée côté serveur. Les exécutions sont déterministes pour une même masse, un même déchet, une même unité, une même provenance et une même version de facteurs.
 
-Chaque réponse API porte `X-Correlation-ID` et des en-têtes de durcissement. Les audits d'authentification ne contiennent ni mot de passe, ni email brut, ni cookie, ni jeton de session. Cette fondation locale n'inclut toutefois ni MFA, ni récupération de compte, ni fournisseur d'identité, ni rotation de clés, ni journal inviolable, ni administration complète des invitations.
+Chaque réponse API porte `X-Correlation-ID` et des en-têtes de durcissement. Les audits d'authentification ne contiennent ni mot de passe, ni email brut, ni cookie, ni jeton de session. Cette fondation locale n'inclut toutefois ni MFA, ni récupération de compte, ni fournisseur d'identité, ni rotation de clés, ni journal inviolable, ni acheminement externe sécurisé des invitations.
 
 ### Sécurité des preuves locales
 
@@ -284,16 +284,16 @@ Les tables sont créées par migrations additives `CREATE TABLE IF NOT EXISTS` e
 
 ## Identités et autorisations de démonstration
 
-Le frontend transmet `X-Demo-User-ID`, choisi dans un catalogue JSON fictif. FastAPI résout l'appartenance, applique les autorisations et inscrit utilisateur, organisation et rôle dans chaque nouvel événement d'audit. Ce sélecteur n'est pas une connexion : il n'offre ni mot de passe, ni session signée, ni MFA, ni protection contre l'usurpation.
+En mode démonstration historique, le frontend transmet `X-Demo-User-ID`, choisi dans un catalogue JSON fictif. FastAPI résout l'appartenance, applique les autorisations et inscrit utilisateur, organisation et rôle dans chaque nouvel événement d'audit. Ce sélecteur reste distinct de l'authentification pilote : il n'offre ni mot de passe, ni session serveur, ni MFA, ni protection contre l'usurpation.
 
 | Rôle | Lecture | Écriture autorisée |
 |---|---|---|
 | Producteur | ses déclarations uniquement | déclaration de son site, proposition et preuve P2 propre |
 | Logistique | collectes assignées | preuve P2, pesée P3, confirmation puis lot assigné |
-| Opérateur unité | lots de son unité | acceptation ou refus non écrasable |
-| Contrôleur terrain | lots en attente de contrôle | événement de vérification P4 explicite et idempotent |
-| Coordinateur | vue transversale et audit filtrable | opérations de démonstration sur le parcours historique |
-| Client/agriculteur | produits réellement représentés | aucune dans cette tranche |
+| Opérateur unité | lots, transformations et produits de son unité | décision de lot, transformation et sorties P3 mesurées |
+| Contrôleur terrain | produits en attente de contrôle et provenance utile | contrôle qualité, libération ou rejet interne P4 |
+| Coordinateur | vue transversale, audit et jeu analytique interne | validation d'organisations, invitations locales et révocations |
+| Client/agriculteur | produits libérés, stock disponible et provenance | réservation de quantité puis annulation de sa propre réservation |
 
 Les notifications `proposal.available`, `collection.assigned`, `lot.incoming`, `control.required` et `lot.decision_recorded` sont persistées avec une clé de déduplication. Aucun email, SMS ou message externe n'est envoyé.
 
@@ -319,13 +319,13 @@ Les projections 7/30 jours sont des agrégations mécaniques P0. Elles prolongen
 - Aucun facteur de matière sèche, solides volatils, potentiel méthane ou efficacité procédé n'est renseigné.
 - Compatibilités et capacités doivent être validées par une unité réelle avant pilote.
 - La distance haversine n'est ni une distance routière, ni une optimisation de tournée, ni une estimation de coût.
-- Une preuve P2 et une mesure P3 sont des saisies de démonstration : aucune analyse qualité ou validation terrain indépendante n'est encore liée.
-- Le stockage de pièces local n'inclut ni antivirus, ni stockage objet, ni URL temporaire ; ces contrôles sont requis avant pilote.
-- Les identités sont sélectionnables par en-tête et ne sont pas authentifiées ; elles servent à démontrer l'autorisation, l'attribution et l'audit, pas la sécurité de production.
+- Une preuve P2 et une mesure P3 restent des saisies de démonstration. Les contrôles qualité liés aux produits et leur libération P4 sont internes au pilote ; ils ne constituent ni validation terrain indépendante, ni certification P5.
+- Le stockage de pièces local n'inclut ni antivirus, ni stockage objet, ni URL temporaire ; ces contrôles sont requis avant un pilote terrain.
+- En mode démonstration historique, les identités sélectionnables par en-tête ne sont pas authentifiées ; elles servent à démontrer l'autorisation, l'attribution et l'audit, pas la sécurité de production.
 - Le rôle contrôleur permet un événement P4 dans ce modèle, mais aucune qualification, signature professionnelle ou certification P5 n'est fournie.
 - Les projections ne modélisent ni saisonnalité, contamination, disponibilité, probabilité d'acceptation, temps routier ni production réelle.
 - Avant tout apprentissage, il faudra un historique de masses déclarées/mesurées, fréquences, saisons, déchets, contaminations, acceptations/refus, temps de collecte, capacités et productions réellement mesurées.
-- L'audit local ne remplace pas session signée, RBAC administrable, journal inviolable, sauvegardes et supervision d'un environnement de production.
+- L'audit et les sessions opaques du pilote ne remplacent pas un fournisseur d'identité durci, un journal inviolable, des sauvegardes et la supervision d'un environnement de production.
 - L'authentification pilote ne constitue pas une homologation ou certification de sécurité de production.
 - Le cache hors ligne ne couvre ni portails privés, ni preuves, ni mesures, ni lots ; seule une nouvelle déclaration peut attendre la reprise réseau.
 - Le profil enrichi est P0, créé par une règle déterministe à graine fixe ; il ne prouve aucun volume ou comportement réel.
@@ -336,4 +336,4 @@ La règle de crédibilité et le périmètre fonctionnel proviennent de `outputs
 
 ## Prochaine tranche recommandée
 
-Ajouter une tranche **administration des invitations et validation d'organisations → transformation mesurée → produit qualifié → disponibilité client**. Elle devra d'abord fournir l'approbation explicite des unités/logisticiens et des rôles sensibles, puis enregistrer entrées, pertes et sorties mesurées, critères qualité, statut de libération, stock disponible et provenance, sans déduire un rendement scientifique des URI illustratives. MFA, récupération de compte, stockage objet sécurisé, rétention et PostgreSQL/PostGIS complet restent des prérequis distincts avant production.
+Préparer une tranche 06 de **durcissement du pilote et validation terrain** : protocoles de mesure et de contrôle documentés, stockage objet sécurisé des preuves, sauvegardes et observabilité, récupération de compte/MFA, puis migration contrôlée du repository métier vers PostgreSQL/PostGIS. Cette tranche devra préserver la provenance et les niveaux P0 à P5, sans transformer les URI illustratives ni les contrôles internes P4 en rendement scientifique, certification ou allégation réglementaire.
