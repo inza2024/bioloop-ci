@@ -8,6 +8,7 @@ __pycache__/
 # Node / Next.js
 node_modules/
 .next/
+.next-*/
 playwright-report/
 test-results/
 *.tsbuildinfo

@@ -1,6 +1,6 @@
-# BioLoop CI — tranches verticales 01 à 04 du MVP
+# BioLoop CI — tranches verticales 01 à 05 du MVP
 
-BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il relie la déclaration et l'estimation illustrative, la traçabilité P2/P3 du lot, une collaboration multi-acteurs, puis une fondation pilote mobile avec comptes locaux, sessions serveur, PWA et données synthétiques enrichies optionnelles.
+BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il relie la déclaration et l'estimation illustrative, la traçabilité P2/P3 du lot, une collaboration multi-acteurs, une fondation pilote mobile, puis l'administration, la transformation mesurée, la qualité, l'inventaire et la disponibilité client.
 
 > **Avertissement scientifique** — Aucun résultat affiché n'est un rendement biogaz validé. Le moteur produit des **URI (unités de rendement illustratives)** avec un jeu de multiplicateurs P0 intitulé « simulation illustrative ». Il n'effectue aucune conversion vers `Nm³`, `kWh`, FCFA, digestat, engrais ou crédit environnemental.
 
@@ -25,7 +25,12 @@ BioLoop CI est un démonstrateur local pour le SIREXE Hackathon 2026. Il relie l
 - attribuer acceptation/refus à l'opérateur de l'unité destinataire ;
 - créer un événement P4 uniquement avec le rôle contrôleur terrain ;
 - afficher des projections déterministes P0 sur 7 et 30 jours, avec bases P1 et P3 séparées ;
-- présenter au client un état vide honnête tant qu'aucun produit qualifié n'existe.
+- administrer les inscriptions en attente, invitations locales et révocations avec un coordinateur autorisé ;
+- transformer uniquement des lots acceptés et saisir explicitement chaque entrée, perte et sortie physique ;
+- créer des lots produits en quarantaine, enregistrer un contrôle puis une libération interne P4 ;
+- dériver le stock d'un registre de mouvements immuables et réserver sans paiement ;
+- publier au client uniquement les produits libérés avec quantité réellement disponible ;
+- parcourir la provenance de la déclaration à la réservation.
 
 La tranche 04 ajoute une **authentification pilote locale**, pas une sécurité de production certifiée. La démo n'inclut volontairement ni paiement, ni crédit carbone, ni blockchain, ni agent IA autonome. Aucun LLM ni modèle externe n'intervient dans les calculs, prévisions, appariements ou tournées.
 
@@ -44,6 +49,18 @@ La tranche 04 ajoute une **authentification pilote locale**, pas une sécurité 
 - contrats `ForecastService`, `MatchingService`, `RoutingService` et `AnomalyDetectionService`, avec versions, variables, preuve, incertitude, limites et validation humaine.
 
 Le service worker ne cache jamais `/api/*` ni `/portal/*`. Aucune session, preuve, mesure, pièce binaire ou donnée privée n'est mise en cache hors ligne. Une synchronisation de déclaration ne crée pas de preuve et ne promeut aucun niveau P1 vers P2/P3/P4.
+
+## Administration, transformation et disponibilité — tranche 05
+
+- Les inscriptions logistiques et unités restent `pending` jusqu'à une décision du coordinateur. L'auto-approbation et l'accès admin des producteurs/clients sont refusés côté API.
+- Les invitations contrôleur/coordinateur sont aléatoires, expirables (1 à 168 h), locales à la démo et stockées uniquement sous empreinte SHA-256. Aucun email externe n'est envoyé.
+- Une transformation accepte un ou plusieurs lots déjà `accepted`. Elle conserve procédé, opérateur, dates, preuves, mesures d'entrée et pertes sans utiliser les URI illustratives.
+- Une sortie est une saisie physique P3 indépendante (`kg`, `L` ou `m3`). Le digestat brut reste explicitement « usage à qualifier » ; aucune propriété d'engrais ou biofertilisant n'est déduite.
+- Les statuts qualité sont `quarantine`, `pending_analysis`, `released` et `rejected`. La libération P4 est une décision interne auditée, jamais une certification P5.
+- Le stock disponible est la somme des mouvements de production, ajustement, réservation, annulation et livraison. Les mouvements ne peuvent être modifiés ou supprimés ; les stocks négatifs et doubles réservations sont rejetés.
+- Le client filtre les produits libérés par catégorie, localisation ou preuve, consulte leur provenance, réserve puis annule sa propre réservation. Aucun paiement n'est présent.
+
+Le schéma analytique interne `transformation-analytics-v1` est décrit dans `docs/analytics/transformation-dataset-v1.md`. Il ne déclenche aucun entraînement, appel LLM ou validation scientifique.
 
 ## Prérequis
 
@@ -138,9 +155,10 @@ Ces historiques synthétiques ne sont ni des observations terrain, ni des donné
 5. Revenir en section 05 et choisir le rôle logistique : la collecte assignée et ses trois arrêts illustratifs apparaissent.
 6. Joindre une pièce, saisir une pesée et confirmer : la pièce reste P2, la masse devient P3, puis le lot est créé.
 7. Choisir l'opérateur d'unité : vérifier compatibilité, capacité P0 et projections 7/30 jours, puis accepter ou refuser le lot.
-8. Choisir le contrôleur : créer l'événement de vérification explicite P4.
-9. Choisir le coordinateur : filtrer le journal par acteur, organisation, objet ou corrélation.
-10. Choisir le client/agriculteur : constater qu'aucun stock ou produit n'est inventé.
+8. Dans l'espace transformation de l'unité, démarrer une exécution depuis le lot accepté puis saisir une ou plusieurs sorties physiques P3.
+9. Choisir le contrôleur : enregistrer le contrôle qualité du produit, puis sa libération interne P4 — non certifiée P5.
+10. Choisir le client/agriculteur : filtrer le produit libéré, consulter sa provenance, réserver une quantité puis l'annuler.
+11. Choisir le coordinateur : traiter les inscriptions, créer une invitation locale, révoquer une appartenance/session et consulter les historiques d'administration et d'audit.
 
 Le parcours historique de la section 04 reste disponible pour démontrer séparément preuve P2, mesure P3, lot, décision et recalcul. Sans en-tête de démonstration, ces routes historiques utilisent le coordinateur fictif afin de préserver les tranches 01 et 02.
 
@@ -187,6 +205,8 @@ services/api/app/             monolithe FastAPI modulaire
   repository.py               migrations SQLite additives et audit append-only
   identity.py                 identités, organisations et permissions fictives
   collaboration.py            autorisations et vues de travail par rôle
+  administration.py           décisions d'accès, invitations hachées et révocations
+  operations.py               transformations, produits, qualité, inventaire et provenance
   forecasting.py              interface et projection déterministe versionnée
 data/fixtures/                producteurs, unités et types fictifs
 data/factor_sets/             jeu illustratif versionné
@@ -204,7 +224,7 @@ Appliquer explicitement les migrations :
 PYTHONPATH=services/api .venv/bin/alembic -c services/api/alembic.ini upgrade head
 ```
 
-La migration `0004_pilot_auth` est additive et son `downgrade` ne supprime aucune donnée locale.
+La migration `0005_transformation_inventory` est additive. Son `downgrade` est volontairement non destructif afin de ne supprimer aucune donnée locale.
 
 ### API principale
 
@@ -236,6 +256,15 @@ La migration `0004_pilot_auth` est additive et son `downgrade` ne supprime aucun
 | `POST` | `/api/v1/auth/memberships/{id}/activate` | changer d'appartenance accessible |
 | `GET` | `/api/v1/auth/portal/{role}` | vue attribuée et contrôlée côté backend |
 | `GET` | `/api/v1/pilot/synthetic-data` | données P0 enrichies avec version et graine |
+| `GET/POST` | `/api/v1/admin/*` | inscriptions, invitations, révocations et historique coordinateur |
+| `POST` | `/api/v1/transformations` | exécution depuis un ou plusieurs lots acceptés |
+| `POST` | `/api/v1/transformations/{id}/outputs` | sorties physiques P3 explicitement mesurées |
+| `POST` | `/api/v1/products/{id}/quality-tests` | analyse ou contrôle attribué à son acteur |
+| `POST` | `/api/v1/products/{id}/release` | libération/rejet autorisé P4, jamais P5 |
+| `GET` | `/api/v1/products` | produits visibles selon rôle et filtres |
+| `POST` | `/api/v1/products/{id}/reservations` | réservation cliente idempotente, sans paiement |
+| `GET` | `/api/v1/products/{id}/provenance` | chaîne de provenance complète et auditée |
+| `GET` | `/api/v1/analytics/transformation-dataset` | jeu analytique interne réservé au coordinateur |
 
 Les entrées ont des types, longueurs et bornes explicites. Une unité incompatible est rejetée côté serveur. Les exécutions sont déterministes pour une même masse, un même déchet, une même unité, une même provenance et une même version de facteurs.
 

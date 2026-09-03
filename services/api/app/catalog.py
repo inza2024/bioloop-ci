@@ -40,6 +40,11 @@ class Catalog:
                 availability=[],
                 operational_history=[],
                 clients=[],
+                transformations=[],
+                products=[],
+                quality_tests=[],
+                inventory_movements=[],
+                reservations=[],
             )
         elif profile != "small":
             raise ValueError("BIOLOOP_SYNTHETIC_PROFILE doit valoir 'small' ou 'enriched'.")

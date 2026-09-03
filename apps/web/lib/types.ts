@@ -410,6 +410,7 @@ export interface PilotMembership {
   organization_id: string;
   organization_name: string;
   organization_kind: string;
+  site_id: string | null;
   role: DemoRole;
   status: "active" | "pending";
 }
@@ -430,4 +431,155 @@ export interface AuthPortal {
   counters: Record<string, number>;
   proof_summary: string;
   next_action: string;
+}
+
+export type ProductCategory =
+  | "measured_biogas"
+  | "raw_digestate"
+  | "liquid_fraction"
+  | "solid_fraction"
+  | "compost_amendment"
+  | "potential_fertilizing_product"
+  | "other_coproduct";
+
+export interface PendingMembership {
+  id: string;
+  user_id: string;
+  display_name: string;
+  organization_id: string;
+  organization_name: string;
+  organization_kind: string;
+  role: DemoRole;
+  status: "pending";
+  created_at: string;
+}
+
+export interface AdminAction {
+  id: string;
+  action: string;
+  subject_type: string;
+  subject_id: string;
+  decision: string | null;
+  reason: string;
+  actor_user_id: string;
+  actor_organization_id: string;
+  actor_role: string;
+  correlation_id: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AdminSession {
+  id: string;
+  user_id: string;
+  display_name: string;
+  active_membership_id: string;
+  created_at: string;
+  expires_at: string;
+  last_seen_at: string;
+}
+
+export interface TransformationInput {
+  lot_id: string;
+  measured_quantity: string;
+  unit: "kg";
+  measurement_method: string;
+  measured_at: string;
+  provenance: "measured";
+  proof_level: "P3";
+}
+
+export interface TransformationRun {
+  id: string;
+  operator_organization_id: string;
+  processing_unit_id: string;
+  process: string;
+  status: "planned" | "in_progress" | "completed" | "cancelled";
+  started_at: string | null;
+  completed_at: string | null;
+  operator_user_id: string;
+  loss_quantity: string | null;
+  loss_unit: string | null;
+  loss_method: string | null;
+  loss_measured_at: string | null;
+  loss_proof_level: ProofLevel | null;
+  correlation_id: string;
+  created_at: string;
+  inputs: TransformationInput[];
+  evidence_ids: string[];
+  output_product_ids: string[];
+  scientific_derivation: false;
+  measurement_warning: string;
+}
+
+export interface QualityTest {
+  id: string;
+  product_batch_id: string;
+  parameter: string;
+  value: string;
+  unit: string;
+  method: string;
+  laboratory_or_actor: string;
+  document_reference: string | null;
+  tested_at: string;
+  provenance: "measured" | "verified";
+  proof_level: "P3" | "P4";
+}
+
+export interface ProductBatch {
+  id: string;
+  transformation_id: string;
+  owner_organization_id: string;
+  category: ProductCategory;
+  quantity: string;
+  unit: "kg" | "L" | "m3";
+  measurement_method: string;
+  measured_at: string;
+  evidence_id: string | null;
+  provenance: "measured";
+  proof_level: "P3";
+  quality_status: "quarantine" | "pending_analysis" | "released" | "rejected";
+  location: string;
+  correlation_id: string;
+  created_at: string;
+  on_hand_quantity: string;
+  reserved_quantity: string;
+  available_quantity: string;
+  quality_tests: QualityTest[];
+  release_proof_level: ProofLevel | null;
+  quality_warning: string;
+}
+
+export interface CustomerReservation {
+  id: string;
+  product_batch_id: string;
+  customer_organization_id: string;
+  quantity: string;
+  unit: "kg" | "L" | "m3";
+  status: "active" | "cancelled" | "delivered";
+  idempotency_key: string;
+  actor_user_id: string;
+  correlation_id: string;
+  created_at: string;
+  cancelled_at: string | null;
+  delivered_at: string | null;
+}
+
+export interface OperationsWorkspace {
+  actor: DemoActor;
+  accepted_lots: Array<{
+    id: string;
+    declaration_id: string;
+    processing_unit_id: string;
+    waste_type_id: string;
+    measured_quantity_kg: string;
+    quantity_unit: "kg";
+    input_provenance: "measured";
+    input_proof_level: "P3";
+    evidence_ids: string[];
+  }>;
+  transformations: TransformationRun[];
+  products: ProductBatch[];
+  reservations: CustomerReservation[];
+  scientific_notice: string;
 }

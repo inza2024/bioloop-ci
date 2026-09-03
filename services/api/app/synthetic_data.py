@@ -21,6 +21,11 @@ class SyntheticDataset:
     availability: list[dict]
     operational_history: list[dict]
     clients: list[dict]
+    transformations: list[dict]
+    products: list[dict]
+    quality_tests: list[dict]
+    inventory_movements: list[dict]
+    reservations: list[dict]
 
     def summary(self) -> dict:
         return {
@@ -33,6 +38,11 @@ class SyntheticDataset:
                 "availability_windows": len(self.availability),
                 "historical_events": len(self.operational_history),
                 "clients": len(self.clients),
+                "transformations": len(self.transformations),
+                "products": len(self.products),
+                "quality_tests": len(self.quality_tests),
+                "inventory_movements": len(self.inventory_movements),
+                "reservations": len(self.reservations),
             },
         }
 
@@ -167,6 +177,85 @@ def build_enriched_dataset(
         }
         for index in range(1, 9)
     ]
+    transformations = [
+        {
+            "id": f"P0-TRUN-{index:02d}",
+            "processing_unit_id": units[index % len(units)].id,
+            "process": units[index % len(units)].process,
+            "input_quantity_kg": 800 + index * 175,
+            "input_unit": "kg",
+            "duration_hours": 18 + index * 6,
+            "loss_quantity_kg": 25 + index * 5,
+            "status": "completed" if index < 4 else "in_progress",
+            "provenance": "simulated",
+            "proof_level": "P0",
+            "scientific_validation": False,
+        }
+        for index in range(6)
+    ]
+    product_categories = [
+        "measured_biogas",
+        "raw_digestate",
+        "liquid_fraction",
+        "solid_fraction",
+        "compost_amendment",
+        "potential_fertilizing_product",
+    ]
+    products = [
+        {
+            "id": f"P0-PRODUCT-{index + 1:02d}",
+            "transformation_id": transformations[index % len(transformations)]["id"],
+            "category": category,
+            "quantity": 110 + index * 37,
+            "unit": "m3" if category == "measured_biogas" else "kg",
+            "quality_status": "released" if index in {0, 4} else "quarantine",
+            "measurement_method": "méthode fictive non validée",
+            "provenance": "simulated",
+            "proof_level": "P0",
+            "commercial_claim_authorized": False,
+        }
+        for index, category in enumerate(product_categories)
+    ]
+    quality_tests = [
+        {
+            "id": f"P0-QTEST-{index + 1:02d}",
+            "product_id": product["id"],
+            "parameter": "paramètre qualité fictif",
+            "value": str(10 + index),
+            "unit": "unité fictive",
+            "method": "protocole fictif non accrédité",
+            "provenance": "simulated",
+            "proof_level": "P0",
+        }
+        for index, product in enumerate(products)
+    ]
+    inventory_movements = [
+        {
+            "id": f"P0-MOVE-{index + 1:02d}",
+            "product_id": product["id"],
+            "movement_type": "production",
+            "quantity": product["quantity"],
+            "unit": product["unit"],
+            "provenance": "simulated",
+            "proof_level": "P0",
+        }
+        for index, product in enumerate(products)
+    ]
+    reservations = [
+        {
+            "id": f"P0-RES-{index + 1:02d}",
+            "product_id": product["id"],
+            "client_id": clients[index]["id"],
+            "quantity": 20 + index * 5,
+            "unit": product["unit"],
+            "status": "active",
+            "provenance": "simulated",
+            "proof_level": "P0",
+        }
+        for index, product in enumerate(
+            product for product in products if product["quality_status"] == "released"
+        )
+    ]
     metadata = {
         "profile": "enriched",
         "version": SYNTHETIC_VERSION,
@@ -185,4 +274,9 @@ def build_enriched_dataset(
         availability=availability,
         operational_history=history,
         clients=clients,
+        transformations=transformations,
+        products=products,
+        quality_tests=quality_tests,
+        inventory_movements=inventory_movements,
+        reservations=reservations,
     )

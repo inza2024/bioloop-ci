@@ -26,6 +26,20 @@ from .auth import (
     csrf_matches,
     new_csrf_token,
 )
+from .administration import (
+    AdminActionView,
+    AdministrationConflictError,
+    AdministrationError,
+    AdministrationPermissionError,
+    AdministrationService,
+    InvitationAcceptResult,
+    InvitationCreate,
+    InvitationView,
+    MembershipDecisionCreate,
+    PendingMembership,
+    RevocationCreate,
+    SessionView,
+)
 from .collaboration import AuthorizationError, CollaborationService, MODE_LABEL
 from .config import Settings
 from .database import Database, run_migrations
@@ -70,12 +84,36 @@ from .models import (
 )
 from .repository import Repository, RepositoryConflictError
 from .routing import propose_route
+from .operations import (
+    InventoryAdjustmentCreate,
+    InventoryMovementView,
+    OperationsConflictError,
+    OperationsError,
+    OperationsPermissionError,
+    OperationsService,
+    OperationsWorkspace,
+    ProductBatchView,
+    ProductOutputsCreate,
+    ProductReleaseCreate,
+    QualityTestCreate,
+    QualityTestView,
+    ReservationCreate,
+    ReservationView,
+    TransformationCreate,
+    TransformationStatusCreate,
+    TransformationView,
+)
 
 
 DeclarationPath = Annotated[str, Path(pattern=r"^DECL-[A-F0-9]{12}$")]
 LotPath = Annotated[str, Path(pattern=r"^LOT-[A-F0-9]{12}$")]
 CollectionPath = Annotated[str, Path(pattern=r"^COLL-[A-F0-9]{12}$")]
 MembershipPath = Annotated[str, Path(pattern=r"^PMEM-[A-F0-9]{16}$")]
+SessionPath = Annotated[str, Path(pattern=r"^PSESS-[A-F0-9]{16}$")]
+TransformationPath = Annotated[str, Path(pattern=r"^TRUN-[A-F0-9]{16}$")]
+ProductPath = Annotated[str, Path(pattern=r"^PRODLOT-[A-F0-9]{16}$")]
+ReservationPath = Annotated[str, Path(pattern=r"^RES-[A-F0-9]{16}$")]
+InvitationTokenPath = Annotated[str, Path(min_length=32, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")]
 CORRELATION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,99}$")
 REQUEST_CORRELATION_ID: ContextVar[str | None] = ContextVar(
     "bioloop_request_correlation_id", default=None
@@ -102,6 +140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     run_migrations(settings.resolved_database_url)
     database = Database(settings.resolved_database_url)
     auth = AuthService(database, session_ttl_seconds=settings.session_ttl_seconds)
+    administration = AdministrationService(database)
     evidence_storage = EvidenceStorage(settings.evidence_dir)
     estimator = EstimationEngine(settings.factor_set_path)
     identities = IdentityDirectory(settings.fixtures_dir / "demo_identities.json")
@@ -121,14 +160,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         identities=identities,
         forecast_service=DeterministicDeclarationForecastService(),
     )
+    operations = OperationsService(database)
 
     app = FastAPI(
         title="BioLoop CI — API de démonstration",
-        version="0.4.0",
+        version="0.5.0",
         description=(
             "Démonstrateur local multi-acteurs. L'identité choisie n'est pas une "
             "authentification de production. Les facteurs, itinéraires et projections "
-            "restent des simulations illustratives P0."
+            "restent des simulations illustratives P0. Les sorties de transformation "
+            "sont exclusivement des mesures explicitement enregistrées."
         ),
     )
     app.add_middleware(
@@ -423,6 +464,483 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         }
 
+    def admin_call(action):
+        try:
+            return action()
+        except AdministrationPermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except AdministrationConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except AdministrationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    def operations_call(action):
+        try:
+            return action()
+        except OperationsPermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except OperationsConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except OperationsError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/v1/admin/memberships/pending",
+        response_model=list[PendingMembership],
+    )
+    async def pending_memberships(
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> list[PendingMembership]:
+        return admin_call(lambda: administration.list_pending_memberships(actor))
+
+    @app.post("/api/v1/admin/memberships/{membership_id}/decision")
+    async def decide_membership(
+        membership_id: MembershipPath,
+        data: MembershipDecisionCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> dict:
+        admin_call(
+            lambda: administration.decide_membership(
+                membership_id,
+                data,
+                actor,
+                correlation_id=correlation_id(),
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="admin.membership_decided",
+            object_type="pilot_membership",
+            object_id=membership_id,
+            payload={
+                "decision": data.decision,
+                "reason_provided": bool(data.reason),
+                "processing_unit_id": data.processing_unit_id,
+            },
+            actor=actor,
+        )
+        return {
+            "membership_id": membership_id,
+            "decision": data.decision,
+            "status": "active" if data.decision == "approved" else "refused",
+        }
+
+    @app.post(
+        "/api/v1/admin/invitations",
+        response_model=InvitationView,
+        status_code=201,
+    )
+    async def create_invitation(
+        data: InvitationCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> InvitationView:
+        invitation = admin_call(
+            lambda: administration.create_invitation(
+                data, actor, correlation_id=correlation_id()
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="admin.invitation_created",
+            object_type="pilot_role_invitation",
+            object_id=invitation.id,
+            payload={
+                "role": invitation.role.value,
+                "organization_id": invitation.organization_id,
+                "expires_at": invitation.expires_at.isoformat(),
+                "token_stored_as_hash": True,
+                "delivery": invitation.delivery,
+            },
+            actor=actor,
+        )
+        return invitation
+
+    @app.post(
+        "/api/v1/auth/invitations/{token}/accept",
+        response_model=InvitationAcceptResult,
+    )
+    async def accept_invitation(
+        token: InvitationTokenPath,
+        request: Request,
+        context: AuthContext = Depends(current_auth_context),
+    ) -> InvitationAcceptResult:
+        require_csrf(request)
+        accepted = admin_call(
+            lambda: administration.accept_invitation(
+                token,
+                actor=context.actor,
+                email=context.user.email,
+                correlation_id=correlation_id(),
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="auth.invitation_accepted",
+            object_type="pilot_membership",
+            object_id=accepted.membership_id,
+            payload={
+                "organization_id": accepted.organization_id,
+                "role": accepted.role.value,
+            },
+            actor=context.actor,
+        )
+        return accepted
+
+    @app.get("/api/v1/admin/sessions", response_model=list[SessionView])
+    async def active_sessions(
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> list[SessionView]:
+        return admin_call(lambda: administration.list_sessions(actor))
+
+    @app.post("/api/v1/admin/memberships/{membership_id}/revoke")
+    async def revoke_membership(
+        membership_id: MembershipPath,
+        data: RevocationCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> dict[str, str]:
+        admin_call(
+            lambda: administration.revoke_membership(
+                membership_id,
+                actor,
+                reason=data.reason,
+                correlation_id=correlation_id(),
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="admin.membership_revoked",
+            object_type="pilot_membership",
+            object_id=membership_id,
+            payload={"reason_provided": True},
+            actor=actor,
+        )
+        return {"status": "revoked"}
+
+    @app.post("/api/v1/admin/sessions/{session_id}/revoke")
+    async def revoke_session(
+        session_id: SessionPath,
+        data: RevocationCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> dict[str, str]:
+        admin_call(
+            lambda: administration.revoke_session(
+                session_id,
+                actor,
+                reason=data.reason,
+                correlation_id=correlation_id(),
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="admin.session_revoked",
+            object_type="pilot_session",
+            object_id=session_id,
+            payload={"reason_provided": True},
+            actor=actor,
+        )
+        return {"status": "revoked"}
+
+    @app.get("/api/v1/admin/history", response_model=list[AdminActionView])
+    async def admin_history(
+        limit: int = Query(default=100, ge=1, le=500),
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> list[AdminActionView]:
+        return admin_call(lambda: administration.list_history(actor, limit=limit))
+
+    @app.get("/api/v1/operations/workspace", response_model=OperationsWorkspace)
+    async def operations_workspace(
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> OperationsWorkspace:
+        return operations_call(lambda: operations.build_workspace(actor))
+
+    @app.post(
+        "/api/v1/transformations",
+        response_model=TransformationView,
+        status_code=201,
+    )
+    async def create_transformation(
+        data: TransformationCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> TransformationView:
+        item = operations_call(
+            lambda: operations.create_transformation(
+                data, actor, correlation_id=correlation_id()
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="transformation.created",
+            object_type="transformation_run",
+            object_id=item.id,
+            payload={
+                "processing_unit_id": item.processing_unit_id,
+                "input_lot_ids": [entry.lot_id for entry in item.inputs],
+                "input_proof_level": ProofLevel.P3.value,
+                "scientific_derivation": False,
+            },
+            actor=actor,
+        )
+        return item
+
+    @app.post(
+        "/api/v1/transformations/{transformation_id}/status",
+        response_model=TransformationView,
+    )
+    async def update_transformation_status(
+        transformation_id: TransformationPath,
+        data: TransformationStatusCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> TransformationView:
+        item = operations_call(
+            lambda: operations.update_transformation_status(
+                transformation_id, data, actor
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type=f"transformation.{item.status}",
+            object_type="transformation_run",
+            object_id=item.id,
+            payload={
+                "status": item.status,
+                "loss_proof_level": item.loss_proof_level.value if item.loss_proof_level else None,
+            },
+            actor=actor,
+        )
+        return item
+
+    @app.post(
+        "/api/v1/transformations/{transformation_id}/outputs",
+        response_model=list[ProductBatchView],
+        status_code=201,
+    )
+    async def create_product_outputs(
+        transformation_id: TransformationPath,
+        data: ProductOutputsCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> list[ProductBatchView]:
+        products = operations_call(
+            lambda: operations.create_outputs(
+                transformation_id, data, actor, correlation_id=correlation_id()
+            )
+        )
+        for product in products:
+            repository.append_audit_event(
+                correlation_id=correlation_id(),
+                event_type="product.measured_output_recorded",
+                object_type="product_batch",
+                object_id=product.id,
+                payload={
+                    "transformation_id": transformation_id,
+                    "category": product.category,
+                    "quantity": str(product.quantity),
+                    "unit": product.unit,
+                    "proof_level": ProofLevel.P3.value,
+                    "derived_from_illustrative_uri": False,
+                },
+                actor=actor,
+            )
+        return products
+
+    @app.post(
+        "/api/v1/products/{product_id}/quality-tests",
+        response_model=QualityTestView,
+        status_code=201,
+    )
+    async def create_quality_test(
+        product_id: ProductPath,
+        data: QualityTestCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> QualityTestView:
+        quality = operations_call(
+            lambda: operations.add_quality_test(
+                product_id, data, actor, correlation_id=correlation_id()
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="product.quality_test_recorded",
+            object_type="product_batch",
+            object_id=product_id,
+            payload={
+                "quality_test_id": quality.id,
+                "parameter": quality.parameter,
+                "proof_level": quality.proof_level.value,
+            },
+            actor=actor,
+        )
+        return quality
+
+    @app.post(
+        "/api/v1/products/{product_id}/release",
+        response_model=ProductBatchView,
+    )
+    async def release_product(
+        product_id: ProductPath,
+        data: ProductReleaseCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> ProductBatchView:
+        product = operations_call(
+            lambda: operations.release_product(
+                product_id, data, actor, correlation_id=correlation_id()
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type=f"product.{data.status}",
+            object_type="product_batch",
+            object_id=product_id,
+            payload={
+                "quality_status": data.status,
+                "proof_level": ProofLevel.P4.value,
+                "certified": False,
+            },
+            actor=actor,
+        )
+        return product
+
+    @app.get("/api/v1/products", response_model=list[ProductBatchView])
+    async def list_products(
+        category: str | None = Query(default=None, max_length=50),
+        location: str | None = Query(default=None, max_length=120),
+        proof_level: ProofLevel | None = Query(default=None),
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> list[ProductBatchView]:
+        products = operations_call(lambda: operations.list_products(actor))
+        return [
+            item
+            for item in products
+            if (not category or item.category == category)
+            and (not location or location.casefold() in item.location.casefold())
+            and (not proof_level or item.proof_level == proof_level)
+        ]
+
+    @app.post(
+        "/api/v1/products/{product_id}/reservations",
+        response_model=ReservationView,
+        status_code=201,
+    )
+    async def create_reservation(
+        product_id: ProductPath,
+        data: ReservationCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> ReservationView:
+        reservation = operations_call(
+            lambda: operations.reserve(
+                product_id, data, actor, correlation_id=correlation_id()
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="inventory.reserved",
+            object_type="customer_reservation",
+            object_id=reservation.id,
+            payload={
+                "product_batch_id": product_id,
+                "quantity": str(reservation.quantity),
+                "unit": reservation.unit,
+            },
+            actor=actor,
+        )
+        return reservation
+
+    @app.post(
+        "/api/v1/reservations/{reservation_id}/cancel",
+        response_model=ReservationView,
+    )
+    async def cancel_reservation(
+        reservation_id: ReservationPath,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> ReservationView:
+        reservation = operations_call(
+            lambda: operations.cancel_reservation(
+                reservation_id, actor, correlation_id=correlation_id()
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="inventory.reservation_cancelled",
+            object_type="customer_reservation",
+            object_id=reservation.id,
+            payload={"product_batch_id": reservation.product_batch_id},
+            actor=actor,
+        )
+        return reservation
+
+    @app.post(
+        "/api/v1/reservations/{reservation_id}/deliver",
+        response_model=ReservationView,
+    )
+    async def deliver_reservation(
+        reservation_id: ReservationPath,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> ReservationView:
+        reservation = operations_call(
+            lambda: operations.deliver_reservation(
+                reservation_id, actor, correlation_id=correlation_id()
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="inventory.delivered",
+            object_type="customer_reservation",
+            object_id=reservation.id,
+            payload={"product_batch_id": reservation.product_batch_id},
+            actor=actor,
+        )
+        return reservation
+
+    @app.post(
+        "/api/v1/products/{product_id}/inventory-adjustments",
+        response_model=ProductBatchView,
+    )
+    async def adjust_inventory(
+        product_id: ProductPath,
+        data: InventoryAdjustmentCreate,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> ProductBatchView:
+        product = operations_call(
+            lambda: operations.adjust_inventory(
+                product_id, data, actor, correlation_id=correlation_id()
+            )
+        )
+        repository.append_audit_event(
+            correlation_id=correlation_id(),
+            event_type="inventory.adjusted",
+            object_type="product_batch",
+            object_id=product_id,
+            payload={
+                "quantity_delta": str(data.quantity_delta),
+                "unit": data.unit,
+                "reason_provided": True,
+            },
+            actor=actor,
+        )
+        return product
+
+    @app.get(
+        "/api/v1/products/{product_id}/inventory-movements",
+        response_model=list[InventoryMovementView],
+    )
+    async def inventory_movements(
+        product_id: ProductPath,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> list[InventoryMovementView]:
+        return operations_call(lambda: operations.list_movements(product_id, actor))
+
+    @app.get("/api/v1/products/{product_id}/provenance")
+    async def product_provenance(
+        product_id: ProductPath,
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> dict:
+        return operations_call(lambda: operations.provenance_chain(product_id, actor))
+
+    @app.get("/api/v1/analytics/transformation-dataset")
+    async def transformation_analytics_dataset(
+        actor: DemoActor = Depends(explicit_demo_actor),
+    ) -> dict:
+        return operations_call(lambda: operations.analytics_dataset(actor))
+
     @app.get("/api/v1/demo/actors", response_model=DemoActorCatalog)
     async def get_demo_actors() -> DemoActorCatalog:
         if not settings.demo_identities_enabled:
@@ -478,6 +996,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "logistics": dataset.logistics,
             "operational_history": dataset.operational_history,
             "clients": dataset.clients,
+            "transformations": dataset.transformations,
+            "products": dataset.products,
+            "quality_tests": dataset.quality_tests,
+            "inventory_movements": dataset.inventory_movements,
+            "reservations": dataset.reservations,
             "accessed_by_organization_id": context.active_membership.organization_id,
         }
 

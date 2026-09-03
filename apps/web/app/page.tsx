@@ -188,7 +188,7 @@ export default function Home() {
         </nav>
         <div className="hero-grid" id="top">
           <div>
-            <span className="eyebrow">SIREXE Hackathon 2026 · tranches verticales 01 + 02 + 03</span>
+            <span className="eyebrow">SIREXE Hackathon 2026 · tranches verticales 01 à 05</span>
             <h1>Du gisement déclaré au lot <span>traçable.</span></h1>
             <p className="hero-copy">
               Un parcours local pour déclarer un déchet organique, identifier une unité

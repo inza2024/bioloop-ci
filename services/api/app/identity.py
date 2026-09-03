@@ -34,17 +34,29 @@ PERMISSIONS: dict[DemoRole, list[str]] = {
         "lot:read:own_unit",
         "lot:decide:own_unit",
         "projection:read:own_unit",
+        "transformation:manage:own_unit",
+        "product:measure:own_unit",
+        "inventory:read:own_unit",
     ],
     DemoRole.FIELD_CONTROLLER: [
         "control:read:pending",
         "verification:create:p4",
+        "product:quality:record",
+        "product:release:p4",
     ],
     DemoRole.COORDINATOR: [
         "overview:read:any",
         "audit:read:any",
         "demo:operate:any",
+        "administration:manage:pilot",
+        "transformation:read:any",
+        "inventory:read:any",
     ],
-    DemoRole.CLIENT: ["product:read:represented"],
+    DemoRole.CLIENT: [
+        "product:read:released",
+        "reservation:create:own",
+        "reservation:cancel:own",
+    ],
 }
 
 

@@ -1433,5 +1433,9 @@ class Repository:
                     "lot_decisions",
                     "verifications",
                     "notifications",
+                    "transformation_runs",
+                    "product_batches",
+                    "inventory_movements",
+                    "customer_reservations",
                 )
             }

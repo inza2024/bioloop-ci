@@ -1,4 +1,4 @@
-# Dictionnaire de données — tranches verticales 01 à 04
+# Dictionnaire de données — tranches verticales 01 à 05
 
 | Champ | Unité | Provenance | Preuve | Règle |
 |---|---|---|---|---|
@@ -47,12 +47,29 @@
 | `synthetic_data.version` | identifiant | configuration | P0 | `pilot-p0-fixed-seed-v1` |
 | `decision_metadata.uncertainty` | texte | contrat de service | P0 | limites explicites ; aucune distribution scientifique inventée |
 | `decision_metadata.human_validation_required` | booléen | contrat de service | P0 | vrai pour prévision, appariement, tournée et anomalie de référence |
+| `pilot_role_invitation.token_hash` | hexadécimal SHA-256 | secret dérivé | sécurité | jeton aléatoire affiché une fois ; expiration 1 à 168 h ; jamais stocké en clair |
+| `pilot_admin_action` | événement | attribution serveur | selon décision | acteur, organisation, rôle, motif, corrélation et horodatage ; historique séparé |
+| `transformation_run.status` | statut | déclaré par l'unité | P1 | `planned`, `in_progress`, `completed` ou `cancelled` ; transitions contrôlées |
+| `transformation_input.measured_quantity` | kg | mesuré à l'entrée unité | P3 | lot accepté uniquement ; > 0 et ≤ masse P3 du lot source |
+| `transformation_run.loss_quantity` | `kg`, `L` ou `m3` | mesuré | P3 | facultatif ; méthode et date obligatoires lorsqu'une perte est saisie |
+| `product_batch.category` | catégorie contrôlée | déclaré et mesuré | P3 | aucune catégorie ne crée automatiquement une allégation d'engrais |
+| `product_batch.quantity` | `kg`, `L` ou `m3` | mesuré par l'opérateur | P3 | saisie explicite ; jamais calculée depuis les URI illustratives |
+| `product_batch.measurement_method` | texte | mesuré | P3 | méthode de mesure obligatoire et auditée |
+| `product_batch.quality_status` | statut | workflow qualité | P3/P4 | `quarantine`, `pending_analysis`, `released` ou `rejected` |
+| `product_quality_test` | valeur + unité | mesuré ou vérifié | P3/P4 | P4 uniquement lorsqu'enregistré par le contrôleur ; document facultatif |
+| `product_release_event` | décision | vérifié interne | P4 | contrôleur/coordinateur seulement ; ne vaut jamais certification P5 |
+| `inventory_movement.on_hand_delta` | même unité que le produit | événement | P3 ou P1 | production/ajustement/livraison ; somme dérivée, aucune quantité courante éditable |
+| `inventory_movement.reserved_delta` | même unité que le produit | événement | P1/P3 | réservation/annulation/livraison ; registre immuable par déclencheurs SQLite |
+| `customer_reservation.quantity` | même unité que le produit | déclaré client | P1 | produit libéré, disponible et clé idempotente unique par organisation cliente |
+| `analytics.schema_version` | identifiant | configuration | sans promotion | `transformation-analytics-v1`, interne, sans entraînement ni LLM externe |
 
 ## Invariant de preuve
 
 Une donnée ne monte jamais automatiquement de niveau : une pièce reste P2, une pesée saisie reste P3 et une décision d'une identité non authentifiée reste P1. Le calcul dérivé conserve le niveau le plus faible de ses entrées ; scénarios et projections restent P0 à cause des règles illustratives. Seule une ligne `verification` séparée, créée par le rôle contrôleur et auditée, porte P4. Aucun élément n'est certifié P5.
 
 Une session authentifiée attribue un acteur et une organisation, mais ne change jamais le niveau de preuve d'une donnée métier. Une déclaration synchronisée depuis IndexedDB reste P1. Le client ne met jamais en file une pièce P2, une mesure P3, un lot, une décision ou une vérification.
+
+Une entrée ou sortie de transformation réellement saisie est P3. Le contrôle qualité peut être P3 ou P4 selon le rôle ; l'événement séparé de libération est P4. Le stock dérivé ne rehausse aucun niveau. Réserver ou annuler est une déclaration P1 du client. Aucun de ces événements ne devient P5 sans processus de certification absent du MVP.
 
 ## Tables additives de la tranche 03
 
@@ -61,3 +78,7 @@ Une session authentifiée attribue un acteur et une organisation, mais ne change
 ## Tables additives de la tranche 04
 
 `pilot_users`, `pilot_organizations`, `pilot_memberships`, `pilot_sessions`, `pilot_login_attempts` et `pilot_role_invitations` sont créées par Alembic. `client_idempotency_key` est ajouté à `waste_declarations` avec un index unique par organisation. La migration ne supprime ni table, ni colonne, ni historique existant.
+
+## Tables additives de la tranche 05
+
+`pilot_admin_actions`, `transformation_runs`, `transformation_inputs`, `transformation_evidence`, `product_batches`, `product_quality_tests`, `product_release_events`, `customer_reservations` et `inventory_movements` sont ajoutées par `0005_transformation_inventory`. `site_id` complète les organisations pilotes et les invitations reçoivent acteur, création, utilisation et révocation. Les soldes sont calculés depuis les mouvements ; deux déclencheurs SQLite interdisent leur mise à jour et leur suppression. Le `downgrade` ne détruit aucune donnée.

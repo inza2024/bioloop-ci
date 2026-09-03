@@ -16,6 +16,15 @@ import type {
   AuditEvent,
   AuthContext,
   AuthPortal,
+  AdminAction,
+  AdminSession,
+  CustomerReservation,
+  OperationsWorkspace,
+  PendingMembership,
+  ProductBatch,
+  ProductCategory,
+  QualityTest,
+  TransformationRun,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -224,4 +233,129 @@ export const api = {
     const query = new URLSearchParams(filters);
     return request<AuditEvent[]>(`/api/v1/demo/audit?${query.toString()}`, undefined, demoUserId);
   },
+  operationsWorkspace: (demoUserId: string) =>
+    request<OperationsWorkspace>("/api/v1/operations/workspace", undefined, demoUserId),
+  pendingMemberships: (demoUserId: string) =>
+    request<PendingMembership[]>("/api/v1/admin/memberships/pending", undefined, demoUserId),
+  adminHistory: (demoUserId: string) =>
+    request<AdminAction[]>("/api/v1/admin/history", undefined, demoUserId),
+  activeAdminSessions: (demoUserId: string) =>
+    request<AdminSession[]>("/api/v1/admin/sessions", undefined, demoUserId),
+  decideMembership: (
+    membershipId: string,
+    payload: { decision: "approved" | "refused"; reason: string; processing_unit_id?: string },
+    demoUserId: string,
+  ) => request<{ membership_id: string; decision: string; status: string }>(
+    `/api/v1/admin/memberships/${membershipId}/decision`,
+    { method: "POST", body: JSON.stringify(payload) },
+    demoUserId,
+  ),
+  createInvitation: (
+    payload: {
+      email: string;
+      role: "field_controller" | "bioloop_coordinator";
+      organization_name: string;
+      expires_in_hours: number;
+    },
+    demoUserId: string,
+  ) => request<{
+    id: string;
+    token: string;
+    organization_id: string;
+    role: DemoWorkspace["actor"]["role"];
+    expires_at: string;
+    delivery: "local_demo_only";
+  }>("/api/v1/admin/invitations", { method: "POST", body: JSON.stringify(payload) }, demoUserId),
+  revokeMembership: (membershipId: string, reason: string, demoUserId: string) =>
+    request<{ status: "revoked" }>(
+      `/api/v1/admin/memberships/${membershipId}/revoke`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+      demoUserId,
+    ),
+  revokeAdminSession: (sessionId: string, reason: string, demoUserId: string) =>
+    request<{ status: "revoked" }>(
+      `/api/v1/admin/sessions/${sessionId}/revoke`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+      demoUserId,
+    ),
+  createTransformation: (
+    payload: {
+      processing_unit_id: string;
+      process: string;
+      started_at: string;
+      inputs: Array<{
+        lot_id: string;
+        measured_quantity: string;
+        unit: "kg";
+        measurement_method: string;
+        measured_at: string;
+        evidence_ids: string[];
+      }>;
+    },
+    demoUserId: string,
+  ) => request<TransformationRun>(
+    "/api/v1/transformations",
+    { method: "POST", body: JSON.stringify(payload) },
+    demoUserId,
+  ),
+  createProductOutputs: (
+    transformationId: string,
+    outputs: Array<{
+      category: ProductCategory;
+      quantity: string;
+      unit: "kg" | "L" | "m3";
+      measurement_method: string;
+      measured_at: string;
+      evidence_id?: string;
+      location: string;
+    }>,
+    demoUserId: string,
+  ) => request<ProductBatch[]>(
+    `/api/v1/transformations/${transformationId}/outputs`,
+    { method: "POST", body: JSON.stringify({ outputs }) },
+    demoUserId,
+  ),
+  addQualityTest: (
+    productId: string,
+    payload: {
+      parameter: string;
+      value: string;
+      unit: string;
+      method: string;
+      laboratory_or_actor: string;
+      document_reference?: string;
+      tested_at: string;
+    },
+    demoUserId: string,
+  ) => request<QualityTest>(
+    `/api/v1/products/${productId}/quality-tests`,
+    { method: "POST", body: JSON.stringify(payload) },
+    demoUserId,
+  ),
+  releaseProduct: (
+    productId: string,
+    payload: { status: "released" | "rejected"; note: string },
+    demoUserId: string,
+  ) => request<ProductBatch>(
+    `/api/v1/products/${productId}/release`,
+    { method: "POST", body: JSON.stringify(payload) },
+    demoUserId,
+  ),
+  reserveProduct: (
+    productId: string,
+    payload: { quantity: string; unit: "kg" | "L" | "m3"; idempotency_key: string },
+    demoUserId: string,
+  ) => request<CustomerReservation>(
+    `/api/v1/products/${productId}/reservations`,
+    { method: "POST", body: JSON.stringify(payload) },
+    demoUserId,
+  ),
+  cancelReservation: (reservationId: string, demoUserId: string) =>
+    request<CustomerReservation>(
+      `/api/v1/reservations/${reservationId}/cancel`,
+      { method: "POST" },
+      demoUserId,
+    ),
+  productProvenance: (productId: string, demoUserId: string) =>
+    request<Record<string, unknown>>(`/api/v1/products/${productId}/provenance`, undefined, demoUserId),
 };

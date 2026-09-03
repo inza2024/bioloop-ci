@@ -93,6 +93,7 @@ class MembershipView(BaseModel):
     organization_id: str
     organization_name: str
     organization_kind: str
+    site_id: str | None = None
     role: DemoRole
     status: Literal["active", "pending"]
 
@@ -379,6 +380,7 @@ class AuthService:
                     SELECT membership.id, membership.organization_id,
                            organization.name AS organization_name,
                            organization.kind AS organization_kind,
+                           organization.site_id,
                            membership.role, membership.status
                     FROM pilot_memberships membership
                     JOIN pilot_organizations organization
@@ -405,6 +407,12 @@ class AuthService:
             organization_id=active.organization_id,
             organization_name=active.organization_name,
             role=active.role,
+            site_type=(
+                "processing_unit"
+                if active.organization_kind == "processing_unit"
+                else "producer" if active.organization_kind == "producer" else None
+            ),
+            site_id=active.site_id,
             is_demo=False,
             authenticated_for_pilot=True,
             authenticated_for_production=False,
